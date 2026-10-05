@@ -1,4 +1,5 @@
 // FitApp: daily counters (weight, lifting volume) -> timestamped records -> data/records.json in the GitHub repo.
+const VERSION = '2026-10-05 17:07 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp';
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -131,6 +132,7 @@ document.addEventListener('click', (e) => { if (e.target.id === 'install' && ins
 window.addEventListener('online', () => sync().then(render));
 
 $('#date').textContent = new Date().toDateString();
+$('#ver').textContent = 'Version ' + VERSION;
 render();
 sync().then(render);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

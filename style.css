@@ -25,3 +25,17 @@ nav button.on{color:var(--acc);font-weight:700}
 .pm{flex:0 0 64px;height:64px;font-size:32px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;cursor:pointer}
 .pm:active{background:var(--acc);color:#000}
 #status{text-align:center;padding:0 16px 8px;min-height:20px}
+/* larger, easier to read */
+body{font-size:20px}
+h1{font-size:28px}#date{font-size:18px}
+.card{padding:20px;border-radius:16px;margin-bottom:16px}
+.card h2{font-size:20px;margin-bottom:14px}
+.ctr{gap:12px;margin-bottom:14px}
+.ctr input{font-size:48px;padding:14px 4px}
+.pm{flex:0 0 88px;height:88px;font-size:48px;border-radius:16px}
+button.btn{font-size:22px;padding:16px 22px;border-radius:12px;width:100%}
+.mute{font-size:18px}
+input{font-size:20px;padding:14px}
+nav button{font-size:20px;padding:20px 0}
+body{padding-bottom:88px}
+.ver{text-align:center;padding:8px 16px}
