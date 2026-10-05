@@ -124,6 +124,10 @@ document.addEventListener('click', (e) => {
   if (d.act === 'sync') { sync().then(render); }
 });
 document.addEventListener('change', (e) => { const id = e.target.dataset.in; if (id) cur[id] = parseFloat(e.target.value) || 0; });
+let installEv;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEv = e; const b = $('#install'); if (b) b.hidden = false; });
+window.addEventListener('appinstalled', () => { installEv = null; const b = $('#install'); if (b) b.hidden = true; });
+document.addEventListener('click', (e) => { if (e.target.id === 'install' && installEv) { installEv.prompt(); installEv = null; e.target.hidden = true; } });
 window.addEventListener('online', () => sync().then(render));
 
 $('#date').textContent = new Date().toDateString();
