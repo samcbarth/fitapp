@@ -4,7 +4,6 @@ const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
 const METRICS = [
   { id: 'weight', label: 'Weight today', unit: 'lb', step: 1, dec: 1 },
-  { id: 'steps', label: 'Steps', unit: '', step: 50, dec: 0 },
   { id: 'volume', label: 'Weight volume', unit: 'lb', step: 5, dec: 0 },
 ];
 const $ = (s) => document.querySelector(s);
