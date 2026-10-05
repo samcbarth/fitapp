@@ -1,82 +1,133 @@
-// FitApp: workouts + nutrition + body metrics. No build, state in localStorage.
-const KEY = 'fitapp.v1';
-const today = () => new Date().toISOString().slice(0, 10);
-const defaults = { workouts: [], food: [], body: [], goals: { kcal: 2400, protein: 160 } };
-let S;
-try { S = { ...defaults, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { S = { ...defaults }; }
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+// FitApp: daily counters (weight, steps, lifting volume) -> timestamped records -> data/records.json in the GitHub repo.
+const REPO = 'samcbarth/fitapp';
+const PATH = 'data/records.json';
+const KEY = 'fitapp.v2';
+const METRICS = [
+  { id: 'weight', label: 'Weight today', unit: 'lb', step: 1, dec: 1 },
+  { id: 'steps', label: 'Steps', unit: '', step: 50, dec: 0 },
+  { id: 'volume', label: 'Weight volume', unit: 'lb', step: 5, dec: 0 },
+];
 const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const num = (id) => parseFloat($('#' + id).value);
-let tab = 'today';
+const ld = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const sv = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
-function bar(v, max) { return `<div class="bar"><div style="width:${Math.min(100, (v / max) * 100 || 0)}%"></div></div>`; }
+let records = ld(KEY, []); // {ts, metric, value, synced}
+let token = ld('fitapp.token', '');
+let tab = 'today';
+let status = '';
+const cur = {}; // working counter values
+
+const dayOf = (ts) => ts.slice(0, 10);
+const localDay = (ts) => new Date(ts).toLocaleDateString('en-CA');
+const todayKey = () => new Date().toLocaleDateString('en-CA');
+function lastFor(m) {
+  const r = records.filter((x) => x.metric === m.id);
+  if (m.id === 'weight') return r.length ? r.at(-1).value : 0;
+  const t = r.filter((x) => localDay(x.ts) === todayKey());
+  return t.length ? t.at(-1).value : 0;
+}
+METRICS.forEach((m) => (cur[m.id] = lastFor(m)));
+
+function counter(m) {
+  const saved = records.filter((x) => x.metric === m.id && localDay(x.ts) === todayKey()).at(-1);
+  return `<div class="card"><h2>${m.label}</h2>
+    <div class="ctr">
+      <button class="pm" data-dec="${m.id}" aria-label="minus">-</button>
+      <input id="in-${m.id}" type="number" inputmode="decimal" step="${m.step}" value="${cur[m.id]}" data-in="${m.id}">
+      <button class="pm" data-inc="${m.id}" aria-label="plus">+</button>
+    </div>
+    <div class="row"><button class="btn" data-save="${m.id}">Save ${m.unit}</button></div>
+    <div class="mute">${saved ? 'Last saved ' + new Date(saved.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ': ' + saved.value : 'Not saved today'}</div></div>`;
+}
+
+function chart(m) {
+  const byDay = {};
+  records.filter((x) => x.metric === m.id).forEach((x) => (byDay[localDay(x.ts)] = x.value)); // last value per day
+  const days = Object.keys(byDay).sort().slice(-30);
+  if (days.length < 2) return `<div class="card"><h2>${m.label}</h2><div class="mute">Need 2+ days of data.</div></div>`;
+  const vals = days.map((d) => byDay[d]);
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const W = 320, H = 120, P = 8;
+  const pts = vals.map((v, i) => [P + (i * (W - 2 * P)) / (vals.length - 1), H - P - ((v - lo) / span) * (H - 2 * P)]);
+  return `<div class="card"><h2>${m.label} <span class="mute">${days[0]} to ${days.at(-1)}</span></h2>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${m.label} chart"><polyline fill="none" stroke="#ff7a1a" stroke-width="2" points="${pts.map((p) => p.join(',')).join(' ')}"/>${pts.map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="#ff7a1a"/>`).join('')}</svg>
+    <div class="mute">min ${lo} · max ${hi} · latest ${vals.at(-1)}</div></div>`;
+}
 
 const views = {
-  today() {
-    const f = S.food.filter((x) => x.date === today());
-    const kcal = f.reduce((a, x) => a + x.kcal, 0);
-    const pro = f.reduce((a, x) => a + x.protein, 0);
-    const w = S.workouts.filter((x) => x.date === today());
-    const last = S.body.at(-1);
-    return `
-      <div class="card"><h2>Calories</h2><div class="big">${kcal} <span class="mute">/ ${S.goals.kcal}</span></div>${bar(kcal, S.goals.kcal)}</div>
-      <div class="card"><h2>Protein (g)</h2><div class="big">${pro} <span class="mute">/ ${S.goals.protein}</span></div>${bar(pro, S.goals.protein)}</div>
-      <div class="card"><h2>Sets logged today</h2><div class="big">${w.length}</div></div>
-      <div class="card"><h2>Latest weight</h2><div class="big">${last ? last.weight + ' lb' : '-'}</div></div>
-      <div class="card"><h2>Goals</h2>
-        <div class="row"><input id="gk" type="number" value="${S.goals.kcal}" aria-label="kcal goal"><input id="gp" type="number" value="${S.goals.protein}" aria-label="protein goal"><button class="btn" data-act="goals">Save</button></div></div>`;
-  },
-  workouts() {
-    const list = S.workouts.slice().reverse().slice(0, 30);
-    const prs = {};
-    S.workouts.forEach((x) => { prs[x.exercise] = Math.max(prs[x.exercise] || 0, x.weight); });
-    return `
-      <div class="card"><h2>Log a set</h2>
-        <div class="row"><input id="ex" placeholder="Exercise" list="exs"></div>
-        <datalist id="exs">${Object.keys(prs).map((e) => `<option value="${esc(e)}">`).join('')}</datalist>
-        <div class="row"><input id="wt" type="number" placeholder="Weight"><input id="rp" type="number" placeholder="Reps"><button class="btn" data-act="addset">Add</button></div></div>
-      <div class="card"><h2>Recent sets</h2>${list.map((x) => `<div class="item"><span>${esc(x.exercise)} <span class="mute">${x.weight} x ${x.reps} · ${x.date}${x.weight === prs[x.exercise] ? ' · PR' : ''}</span></span><button class="x" data-act="delset" data-id="${x.id}">x</button></div>`).join('') || '<div class="mute">Nothing yet.</div>'}</div>`;
-  },
-  food() {
-    const f = S.food.filter((x) => x.date === today());
-    return `
-      <div class="card"><h2>Log food</h2>
-        <div class="row"><input id="fn" placeholder="Food"></div>
-        <div class="row"><input id="fk" type="number" placeholder="kcal"><input id="fp" type="number" placeholder="protein g"><button class="btn" data-act="addfood">Add</button></div></div>
-      <div class="card"><h2>Today</h2>${f.map((x) => `<div class="item"><span>${esc(x.name)} <span class="mute">${x.kcal} kcal · ${x.protein}g</span></span><button class="x" data-act="delfood" data-id="${x.id}">x</button></div>`).join('') || '<div class="mute">Nothing yet.</div>'}</div>`;
-  },
-  body() {
-    const list = S.body.slice().reverse().slice(0, 30);
-    return `
-      <div class="card"><h2>Log weight</h2>
-        <div class="row"><input id="bw" type="number" step="0.1" placeholder="Weight (lb)"><button class="btn" data-act="addbody">Add</button></div></div>
-      <div class="card"><h2>History</h2>${list.map((x) => `<div class="item"><span>${x.weight} lb <span class="mute">${x.date}</span></span><button class="x" data-act="delbody" data-id="${x.id}">x</button></div>`).join('') || '<div class="mute">Nothing yet.</div>'}</div>`;
-  },
-};
-
-const id = () => Date.now() + Math.random();
-const actions = {
-  goals() { S.goals = { kcal: num('gk') || 2400, protein: num('gp') || 160 }; },
-  addset() { const e = $('#ex').value.trim(); if (!e || isNaN(num('wt')) || isNaN(num('rp'))) return false; S.workouts.push({ id: id(), date: today(), exercise: e, weight: num('wt'), reps: num('rp') }); },
-  addfood() { const n = $('#fn').value.trim(); if (!n || isNaN(num('fk'))) return false; S.food.push({ id: id(), date: today(), name: n, kcal: num('fk'), protein: num('fp') || 0 }); },
-  addbody() { if (isNaN(num('bw'))) return false; S.body.push({ id: id(), date: today(), weight: num('bw') }); },
-  delset(d) { S.workouts = S.workouts.filter((x) => x.id !== +d); },
-  delfood(d) { S.food = S.food.filter((x) => x.id !== +d); },
-  delbody(d) { S.body = S.body.filter((x) => x.id !== +d); },
+  today: () => METRICS.map(counter).join(''),
+  charts: () => METRICS.map(chart).join(''),
+  settings: () => `<div class="card"><h2>GitHub sync</h2>
+      <p class="mute">Saved records are written to ${PATH} in ${REPO}. Paste a fine-grained token (this repo only, Contents: read and write). It stays on this device.</p>
+      <div class="row"><input id="tok" type="password" placeholder="github_pat_..." value="${token}"></div>
+      <div class="row"><button class="btn" data-act="tok">Save token</button><button class="btn" data-act="sync">Sync now</button></div>
+      <div class="mute">Unsynced records: ${records.filter((r) => !r.synced).length}</div></div>`,
 };
 
 function render() {
+  if (document.activeElement && document.activeElement.tagName === 'INPUT' && tab === 'today') return;
   $('#view').innerHTML = views[tab]();
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  $('#status').textContent = status;
 }
-document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-tab],[data-act]');
-  if (!t) return;
-  if (t.dataset.tab) tab = t.dataset.tab;
-  else if (actions[t.dataset.act](t.dataset.id) === false) return;
-  else save();
+
+const b64 = (s) => btoa(unescape(encodeURIComponent(s)));
+const unb64 = (s) => decodeURIComponent(escape(atob(s.replace(/\n/g, ''))));
+
+async function sync() {
+  const pending = records.filter((r) => !r.synced);
+  if (!token) { status = pending.length ? 'Saved locally. Add a token in Settings to sync.' : ''; return; }
+  if (!pending.length) return;
+  const api = `https://api.github.com/repos/${REPO}/contents/${PATH}`;
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      let sha, remote = [];
+      const g = await fetch(api, { headers });
+      if (g.ok) { const j = await g.json(); sha = j.sha; remote = JSON.parse(unb64(j.content)); }
+      else if (g.status !== 404) throw new Error('GitHub ' + g.status);
+      const seen = new Set(remote.map((r) => r.ts + r.metric));
+      const merged = remote.concat(pending.filter((r) => !seen.has(r.ts + r.metric)).map(({ ts, metric, value }) => ({ ts, metric, value })));
+      const p = await fetch(api, { method: 'PUT', headers, body: JSON.stringify({ message: `log ${pending.length} record(s)`, content: b64(JSON.stringify(merged, null, 1) + '\n'), sha }) });
+      if (p.status === 409 || p.status === 422) continue; // stale sha, retry
+      if (!p.ok) throw new Error('GitHub ' + p.status);
+      pending.forEach((r) => (r.synced = true));
+      sv(KEY, records);
+      status = 'Synced to GitHub.';
+      return;
+    } catch (e) { status = 'Sync failed (' + e.message + '). Will retry.'; return; }
+  }
+  status = 'Sync conflict. Will retry.';
+}
+
+function save(id) {
+  const m = METRICS.find((x) => x.id === id);
+  const v = parseFloat($('#in-' + id).value);
+  if (isNaN(v)) return;
+  cur[id] = v;
+  records.push({ ts: new Date().toISOString(), metric: id, value: v, synced: false });
+  sv(KEY, records);
+  status = 'Saved.';
   render();
+  sync().then(render);
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('button');
+  if (!t) return;
+  const d = t.dataset;
+  const step = (id, dir) => { const m = METRICS.find((x) => x.id === id); const v = parseFloat($('#in-' + id).value) || 0; cur[id] = Math.max(0, +(v + dir * m.step).toFixed(m.dec + 1)); $('#in-' + id).value = cur[id]; };
+  if (d.inc) return step(d.inc, 1);
+  if (d.dec) return step(d.dec, -1);
+  if (d.save) { document.activeElement.blur(); return save(d.save); }
+  if (d.tab) { tab = d.tab; status = ''; document.activeElement.blur(); return render(); }
+  if (d.act === 'tok') { token = $('#tok').value.trim(); sv('fitapp.token', token); status = 'Token saved.'; document.activeElement.blur(); sync().then(render); return render(); }
+  if (d.act === 'sync') { sync().then(render); }
 });
+document.addEventListener('change', (e) => { const id = e.target.dataset.in; if (id) cur[id] = parseFloat(e.target.value) || 0; });
+window.addEventListener('online', () => sync().then(render));
+
 $('#date').textContent = new Date().toDateString();
 render();
+sync().then(render);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

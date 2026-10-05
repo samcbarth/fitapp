@@ -20,3 +20,8 @@ button.x{background:none;border:0;color:var(--mute);cursor:pointer;flex:0 0 auto
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
 nav button{flex:1;background:none;border:0;color:var(--mute);padding:16px 0;font:inherit;cursor:pointer}
 nav button.on{color:var(--acc);font-weight:700}
+.ctr{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.ctr input{text-align:center;font-size:28px;font-weight:700;padding:12px 4px}
+.pm{flex:0 0 64px;height:64px;font-size:32px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;cursor:pointer}
+.pm:active{background:var(--acc);color:#000}
+#status{text-align:center;padding:0 16px 8px;min-height:20px}
