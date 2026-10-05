@@ -1,5 +1,5 @@
 // FitApp: daily counters (weight, lifting volume) -> timestamped records -> data/records.json in the GitHub repo.
-const VERSION = '2026-10-05 17:15 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-10-05 17:29 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp';
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -74,6 +74,19 @@ function render() {
 const b64 = (s) => btoa(unescape(encodeURIComponent(s)));
 const unb64 = (s) => decodeURIComponent(escape(atob(s.replace(/\n/g, ''))));
 
+
+// data/today.json: tiny summary for home-screen widgets (KWGT etc.)
+async function putSummary(all, headers) {
+  const day = todayKey();
+  const w = all.filter((r) => r.metric === 'weight').at(-1);
+  const v = all.filter((r) => r.metric === 'volume' && localDay(r.ts) === day).at(-1);
+  const body = { date: day, weight: w ? w.value : null, weight_ts: w ? w.ts : null, volume: v ? v.value : 0, updated: new Date().toISOString() };
+  const api = `https://api.github.com/repos/${REPO}/contents/data/today.json`;
+  const g = await fetch(api, { headers });
+  const sha = g.ok ? (await g.json()).sha : undefined;
+  await fetch(api, { method: 'PUT', headers, body: JSON.stringify({ message: 'update today summary', content: b64(JSON.stringify(body, null, 1) + '\n'), sha }) });
+}
+
 async function sync() {
   const pending = records.filter((r) => !r.synced);
   if (!token) { status = pending.length ? 'Saved locally. Add a token in Settings to sync.' : ''; return; }
@@ -91,6 +104,7 @@ async function sync() {
       const p = await fetch(api, { method: 'PUT', headers, body: JSON.stringify({ message: `log ${pending.length} record(s)`, content: b64(JSON.stringify(merged, null, 1) + '\n'), sha }) });
       if (p.status === 409 || p.status === 422) continue; // stale sha, retry
       if (!p.ok) throw new Error('GitHub ' + p.status);
+      await putSummary(merged, headers);
       pending.forEach((r) => (r.synced = true));
       sv(KEY, records);
       status = 'Synced to GitHub.';
@@ -135,4 +149,9 @@ $('#date').textContent = new Date().toDateString();
 $('#ver').textContent = 'Version ' + VERSION;
 render();
 sync().then(render);
+{
+  const m = new URLSearchParams(location.search).get('m');
+  const el = m && $('#in-' + m);
+  if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); el.select(); }
+}
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
