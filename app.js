@@ -1,4 +1,4 @@
-// FitApp: daily counters (weight, steps, lifting volume) -> timestamped records -> data/records.json in the GitHub repo.
+// FitApp: daily counters (weight, lifting volume) -> timestamped records -> data/records.json in the GitHub repo.
 const REPO = 'samcbarth/fitapp';
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
