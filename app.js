@@ -1,11 +1,11 @@
 // FitApp: daily counters (weight, lifting volume) -> timestamped records -> data/records.json in the GitHub repo.
-const VERSION = '2026-10-05 17:07 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-10-05 17:15 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp';
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
 const METRICS = [
   { id: 'weight', label: 'Weight today', unit: 'lb', step: 1, dec: 1 },
-  { id: 'volume', label: 'Weight volume', unit: 'lb', step: 5, dec: 0 },
+  { id: 'volume', label: 'Weight volume', unit: 'lb', step: 25, dec: 0 },
 ];
 const $ = (s) => document.querySelector(s);
 const ld = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
