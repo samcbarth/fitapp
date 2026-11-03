@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-03 19:22 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-03 19:55 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -9,7 +9,9 @@ const DEFAULT_PRESETS = [
   { id: 'walk-block', name: 'Walk around block', weight: 0, reps: 1, unit: 'lap' },
 ];
 const DEFAULT_PROFILE = { sex: 'male', age: 35, heightIn: 70, activity: 1.375, deficit: 750, goal: 200, protein: 200, water: 100, bed: '22:00', wake: '06:00' };
-const PARTS = ['Waist', 'Chest', 'Hips', 'Neck', 'Arm', 'Thigh'];
+// Web push: the remind workflow in the private repo signs pushes with the matching private key (repo secret VAPID_PRIVATE)
+const VAPID_PUBLIC = 'BDJBvsujB4sHc0Cou0F-vXKVtnIGygMA_lC0E1hJq5GVuzM_c6o5Xxjj1V0k2AYzrAXABv-zQdE5xNpJ0SP-Fxg';
+const PARTS =['Waist', 'Chest', 'Hips', 'Neck', 'Arm', 'Thigh'];
 const $ = (s) => document.querySelector(s);
 const ld = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const sv = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
@@ -226,12 +228,32 @@ function profileCard() {
     <div class="mute">Maintenance ${td.value} cal (formula ${td.formula}${td.adaptive ? `, from your logs ${td.adaptive}` : `; adapts after 14 days of food logs, have ${td.logged}`}). Daily target ${calTarget()} cal.</div>`);
 }
 
+function remindCard() {
+  const on = ld('fitapp.push', false), perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  return card('Reminders', `<p class="mute">A Chrome notification every 3 hours, 8am to 8pm, showing what's left for water, protein, calories and lifting.</p>
+    <div class="row"><button class="btn" data-act="push">${on ? 'Re-register this phone' : 'Turn on reminders'}</button>${on ? '<button class="btn ghost" data-act="pushtest">Test</button>' : ''}</div>
+    <div class="mute">${perm === 'denied' ? 'Notifications are blocked. Allow them in Chrome site settings for this app.' : on ? 'On for this phone.' : 'Off.'}</div>`);
+}
+async function enablePush() {
+  if (!token) { status = 'Add a token first; the reminder job reads your subscription from the private repo.'; return render(); }
+  if (await Notification.requestPermission() !== 'granted') { status = 'Notifications not allowed.'; return render(true); }
+  const reg = await navigator.serviceWorker.ready;
+  const key = Uint8Array.from(atob(VAPID_PUBLIC.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+  const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }));
+  const g = await fetch(api('data/push.json'), { headers: ghHeaders() });
+  const sha = g.ok ? (await g.json()).sha : undefined;
+  const body = { subscription: sub.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, updated: new Date().toISOString() };
+  const p = await fetch(api('data/push.json'), { method: 'PUT', headers: ghHeaders(), body: JSON.stringify({ message: 'register push subscription', content: b64(JSON.stringify(body, null, 1) + '\n'), sha }) });
+  if (!p.ok) { status = 'Could not save subscription (' + p.status + '). Check the token.'; return render(true); }
+  sv('fitapp.push', true); status = 'Reminders on.'; render(true);
+}
+
 const views = {
   today: () => dashboard() + weightCard() + presetsCard() + waterCard() + logList((r) => ['set', 'weight', 'volume', 'water'].includes(r.metric), "Today's log", `volume ${volumeByDay()[todayKey()] || 0} lb`),
   food: foodView,
   body: bodyView,
   charts: () => { const tr = weightByDay(), c = foodByDay('cal'), pr = foodByDay('p'); return chart('Weight', tr, 'lb', profile.goal) + chart('Calories', c, 'cal', calTarget()) + chart('Protein', pr, 'g', profile.protein) + chart('Lifting volume', volumeByDay(), 'lb'); },
-  settings: () => profileCard() + presetEditor() + card('GitHub sync', `<p class="mute">Records are written to ${PATH} in the private repo ${REPO}. Paste a fine-grained token (that repo, Contents: read and write). It stays on this device.</p>
+  settings: () => profileCard() + remindCard() + presetEditor() + card('GitHub sync', `<p class="mute">Records are written to ${PATH} in the private repo ${REPO}. Paste a fine-grained token (that repo, Contents: read and write). It stays on this device.</p>
       <div class="row"><input id="tok" type="password" placeholder="github_pat_..." value="${esc(token)}"></div>
       <div class="row"><button class="btn" data-act="tok">Save token</button><button class="btn" data-act="sync">Sync now</button></div>
       <div class="mute">Unsynced records: ${records.filter((r) => !r.synced).length}</div>`),
@@ -373,6 +395,8 @@ const handlers = {
   padd() { const p = { id: 'p' + Date.now(), name: 'New preset', weight: 0, reps: 10, unit: 'reps' }; presets.push(p); sv('fitapp.presets', presets); editing = p.id; render(true); },
   tok() { token = val('#tok'); sv('fitapp.token', token); status = 'Token saved.'; render(true); sync().then(() => render()); },
   sync() { sync().then(() => render()); },
+  push() { enablePush().catch((e) => { status = 'Reminders failed (' + e.message + ').'; render(true); }); },
+  async pushtest() { (await navigator.serviceWorker.ready).showNotification('FitApp check-in', { body: 'This is what reminders look like.', icon: 'icon-192.png', tag: 'remind' }); },
 };
 
 document.addEventListener('click', (e) => {
