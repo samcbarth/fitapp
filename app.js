@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-03 20:38 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-03 20:42 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -157,10 +157,11 @@ function foodView() {
   const row = (key, name, sub, f, extra = '') => `<div class="qrow" data-q="${esc((name + ' ' + sub).toLowerCase())}"><button class="qbtn" data-quick="${esc(key)}"><b>${esc(name)}</b><span>${f.qty ? esc(f.qty) + ' · ' : ''}${macroLine(f)}</span></button>${extra}</div>`;
   const groups = (meals.length ? [['My meals', meals.map((m) => row('m:' + m.id, m.name, 'my meals', m, `<button class="x" data-unmeal="${m.id}" aria-label="remove">✕</button>`))]] : [])
     .concat(FOOD_GROUPS.map(([g, items]) => [g, items.map((it, i) => row(`f:${g}:${i}`, it[0], g, foodOf(it)))]));
-  const saved = card('Quick add', `<div class="grid4">${[0.5, 1, 1.5, 2].map((m) => `<button class="chip${qmul === m ? ' on' : ''}" data-mul="${m}">${m === 0.5 ? '½' : m === 1.5 ? '1½' : m}×</button>`).join('')}</div>
+  const saved = card('Quick add', `<div class="qcount"><span class="mute">How many</span><button class="pm sm" data-qstep="-1" aria-label="fewer">-</button><b id="qn">${qmul}</b><button class="pm sm" data-qstep="1" aria-label="more">+</button></div>
+      <div class="grid4">${[0.5, 5, 10, 15].map((m) => `<button class="chip${qmul === m ? ' on' : ''}" data-mul="${m}">${m === 0.5 ? '½' : m}</button>`).join('')}</div>
       <input id="qf" placeholder="Filter: popeyes, chips, tea..." autocomplete="off">
       <div class="qlist">${groups.map(([g, rows]) => `<div class="qgroup" data-g><h3>${esc(g)}</h3>${rows.join('')}</div>`).join('')}</div>
-      <div class="mute">Tap a food to log ${qmul}× serving. Macros are estimates.</div>`, 'from your orders');
+      <div class="mute">Each food is one piece. Set how many, then tap the food. Count resets to 1 after logging. Macros are estimates.</div>`, 'from your orders');
   const find = card('Find food', `<div class="row"><button class="btn" data-act="scan">Scan barcode</button></div>
       <input id="scanfile" type="file" accept="image/*" capture="environment" hidden>
       <div class="row"><input id="q" placeholder="Search foods or type a barcode"><button class="btn half" data-act="search">Go</button></div>
@@ -414,13 +415,17 @@ document.addEventListener('click', (e) => {
   if (d.wstep) { wIn = +((parseFloat(val('#in-weight')) || 0) + +d.wstep).toFixed(1); $('#in-weight').value = wIn; return; }
   if (d.log) { const p = presets.find((x) => x.id === d.log); return p && add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: +(p.weight * p.reps).toFixed(1) }, 'Logged ' + p.name + '.'); }
   if (d.water) return add({ metric: 'water', value: +d.water }, `+${d.water} oz water.`);
-  if (d.mul) { qmul = +d.mul; return render(true); }
+  // count changes update in place so the list keeps its scroll position
+  const setCount = (n) => { qmul = Math.max(0.5, n); $('#qn').textContent = qmul; document.querySelectorAll('[data-mul]').forEach((b) => b.classList.toggle('on', +b.dataset.mul === qmul)); };
+  if (d.mul) return setCount(+d.mul);
+  if (d.qstep) return setCount(qmul < 1 && +d.qstep > 0 ? 1 : Math.floor(qmul) + +d.qstep);
   if (d.quick) {
     const [kind, a, b] = d.quick.split(':');
     const f = kind === 'm' ? meals.find((x) => x.id === a) : foodOf(FOOD_GROUPS.find(([g]) => g === a)[1][+b]);
     if (!f) return;
     const k = qmul;
-    return logFood({ ...f, qty: k === 1 ? f.qty : `${k}× ${f.qty}`, cal: f.cal * k, p: f.p * k, c: f.c * k, f: f.f * k });
+    qmul = 1;
+    return logFood({ ...f, name: k === 1 ? f.name : `${k} × ${f.name}`, qty: k === 1 ? f.qty : `${k} × ${f.qty}`, cal: f.cal * k, p: f.p * k, c: f.c * k, f: f.f * k });
   }
   if (d.unmeal) { if (confirm('Remove from My meals?')) { meals = meals.filter((m) => m.id !== d.unmeal); sv('fitapp.meals', meals); render(true); } return; }
   if (d.pick) { found = results[+d.pick]; results = []; return render(true); }

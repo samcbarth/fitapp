@@ -74,3 +74,7 @@ label.mute{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;margin-
 .qbtn{flex:1;background:none;border:0;color:var(--fg);text-align:left;padding:12px;font:inherit;cursor:pointer;display:flex;flex-direction:column;gap:2px}
 .qbtn span{color:var(--mute);font-size:15px}
 .qbtn:active{background:var(--acc);color:#000}
+.qcount{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.qcount .mute{flex:1}
+.qcount b{min-width:56px;text-align:center;font-size:32px}
+.pm.sm{flex:0 0 64px;height:64px;font-size:34px}
