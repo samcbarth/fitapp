@@ -50,3 +50,18 @@ body{padding-bottom:130px}
 .edit>input{margin-bottom:8px}
 button.ghost{background:var(--bg);color:var(--fg);border:1px solid var(--line)}
 button.x{font-size:18px;padding:8px}
+/* dashboard, food, body */
+nav button{font-size:17px;padding:18px 0}
+.meter{margin-bottom:14px}
+.mrow{display:flex;justify-content:space-between;gap:8px;font-size:18px}
+.mrow b{font-weight:600}
+.stat{padding:8px 0;border-top:1px solid var(--line)}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.chip{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:16px 0;font:inherit;cursor:pointer}
+.chip:active{background:var(--acc);color:#000}
+button.half{width:auto;flex:0 0 auto}
+label.mute{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;margin-bottom:8px}
+.chk{display:flex;gap:10px;align-items:center;margin:4px 0 12px}
+.chk input{width:24px;height:24px}
+.pic{width:100%;border-radius:12px;margin:8px 0}
+.card h2 .mute{font-weight:400}

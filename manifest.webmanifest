@@ -42,7 +42,7 @@
       ]
     },
     {
-      "name": "Log workout", "short_name": "Workout", "url": "/fitapp/",
+      "name": "Log food", "short_name": "Food", "url": "/fitapp/?m=food",
       "icons": [
         {
           "src": "icon-192.png",
