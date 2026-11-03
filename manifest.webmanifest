@@ -42,9 +42,7 @@
       ]
     },
     {
-      "name": "Log volume",
-      "short_name": "Volume",
-      "url": "/fitapp/?m=volume",
+      "name": "Log workout", "short_name": "Workout", "url": "/fitapp/",
       "icons": [
         {
           "src": "icon-192.png",

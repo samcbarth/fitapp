@@ -40,3 +40,13 @@ nav button{font-size:20px;padding:20px 0}
 body{padding-bottom:88px}
 .ver{text-align:center;padding:8px 16px}
 body{padding-bottom:130px}
+/* presets */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.preset{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:16px;padding:18px 12px;font:inherit;cursor:pointer;display:flex;flex-direction:column;gap:6px;text-align:left;min-height:110px}
+.preset span{color:var(--mute);font-size:18px}
+.preset:active{background:var(--acc);color:#000}
+.preset:active span{color:#000}
+.edit{border-top:1px solid var(--line);padding-top:12px;margin-top:6px}
+.edit>input{margin-bottom:8px}
+button.ghost{background:var(--bg);color:var(--fg);border:1px solid var(--line)}
+button.x{font-size:18px;padding:8px}
