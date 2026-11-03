@@ -65,3 +65,12 @@ label.mute{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;margin-
 .chk input{width:24px;height:24px}
 .pic{width:100%;border-radius:12px;margin:8px 0}
 .card h2 .mute{font-weight:400}
+/* quick add */
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.chip.on{background:var(--acc);color:#000;border-color:var(--acc)}
+.qlist{max-height:55vh;overflow-y:auto;margin:10px 0;border:1px solid var(--line);border-radius:12px;-webkit-overflow-scrolling:touch}
+.qgroup h3{position:sticky;top:0;margin:0;padding:8px 12px;background:var(--card);color:var(--acc);font-size:16px;border-bottom:1px solid var(--line)}
+.qrow{display:flex;align-items:center;border-bottom:1px solid var(--line)}
+.qbtn{flex:1;background:none;border:0;color:var(--fg);text-align:left;padding:12px;font:inherit;cursor:pointer;display:flex;flex-direction:column;gap:2px}
+.qbtn span{color:var(--mute);font-size:15px}
+.qbtn:active{background:var(--acc);color:#000}

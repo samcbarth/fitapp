@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-03 19:55 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-03 20:38 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -28,6 +28,8 @@ let status = '';
 let editing = null; // preset id open in the Settings editor
 let found = null; // food search/scan result being portioned: {name, per100: {cal,p,c,f}, serving}
 let results = []; // food search results
+let qmul = 1; // quick-add serving multiplier
+const foodOf = ([name, qty, cal, p, c, f]) => ({ name, qty, cal, p, c, f });
 let wIn = null; // working weight counter value
 
 const localDay = (ts) => new Date(ts).toLocaleDateString('en-CA');
@@ -152,8 +154,13 @@ function foodView() {
   const t = todayKey(), food = of('food', t);
   const totals = card('Food today', bar('Calories', sum(food, (f) => f.cal), calTarget(), 'cal', true) + bar('Protein', sum(food, (f) => f.p), profile.protein, 'g')
     + `<div class="mute">Carbs ${r0(sum(food, (f) => f.c))} g · Fat ${r0(sum(food, (f) => f.f))} g</div>`);
-  const saved = card('My meals', meals.length ? `<div class="grid">${meals.map((m) => `<button class="preset" data-meal="${m.id}"><b>${esc(m.name)}</b><span>${macroLine(m)}</span></button>`).join('')}</div>
-      <div class="mute" style="margin-top:10px">Tap to log. Remove: <span>${meals.map((m) => `<button class="x" data-unmeal="${m.id}">${esc(m.name)} ✕</button>`).join(' ')}</span></div>` : '<div class="mute">Save a food below and it shows here as a one-tap button.</div>');
+  const row = (key, name, sub, f, extra = '') => `<div class="qrow" data-q="${esc((name + ' ' + sub).toLowerCase())}"><button class="qbtn" data-quick="${esc(key)}"><b>${esc(name)}</b><span>${f.qty ? esc(f.qty) + ' · ' : ''}${macroLine(f)}</span></button>${extra}</div>`;
+  const groups = (meals.length ? [['My meals', meals.map((m) => row('m:' + m.id, m.name, 'my meals', m, `<button class="x" data-unmeal="${m.id}" aria-label="remove">✕</button>`))]] : [])
+    .concat(FOOD_GROUPS.map(([g, items]) => [g, items.map((it, i) => row(`f:${g}:${i}`, it[0], g, foodOf(it)))]));
+  const saved = card('Quick add', `<div class="grid4">${[0.5, 1, 1.5, 2].map((m) => `<button class="chip${qmul === m ? ' on' : ''}" data-mul="${m}">${m === 0.5 ? '½' : m === 1.5 ? '1½' : m}×</button>`).join('')}</div>
+      <input id="qf" placeholder="Filter: popeyes, chips, tea..." autocomplete="off">
+      <div class="qlist">${groups.map(([g, rows]) => `<div class="qgroup" data-g><h3>${esc(g)}</h3>${rows.join('')}</div>`).join('')}</div>
+      <div class="mute">Tap a food to log ${qmul}× serving. Macros are estimates.</div>`, 'from your orders');
   const find = card('Find food', `<div class="row"><button class="btn" data-act="scan">Scan barcode</button></div>
       <input id="scanfile" type="file" accept="image/*" capture="environment" hidden>
       <div class="row"><input id="q" placeholder="Search foods or type a barcode"><button class="btn half" data-act="search">Go</button></div>
@@ -407,7 +414,14 @@ document.addEventListener('click', (e) => {
   if (d.wstep) { wIn = +((parseFloat(val('#in-weight')) || 0) + +d.wstep).toFixed(1); $('#in-weight').value = wIn; return; }
   if (d.log) { const p = presets.find((x) => x.id === d.log); return p && add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: +(p.weight * p.reps).toFixed(1) }, 'Logged ' + p.name + '.'); }
   if (d.water) return add({ metric: 'water', value: +d.water }, `+${d.water} oz water.`);
-  if (d.meal) { const m = meals.find((x) => x.id === d.meal); return m && logFood(m); }
+  if (d.mul) { qmul = +d.mul; return render(true); }
+  if (d.quick) {
+    const [kind, a, b] = d.quick.split(':');
+    const f = kind === 'm' ? meals.find((x) => x.id === a) : foodOf(FOOD_GROUPS.find(([g]) => g === a)[1][+b]);
+    if (!f) return;
+    const k = qmul;
+    return logFood({ ...f, qty: k === 1 ? f.qty : `${k}× ${f.qty}`, cal: f.cal * k, p: f.p * k, c: f.c * k, f: f.f * k });
+  }
   if (d.unmeal) { if (confirm('Remove from My meals?')) { meals = meals.filter((m) => m.id !== d.unmeal); sv('fitapp.meals', meals); render(true); } return; }
   if (d.pick) { found = results[+d.pick]; results = []; return render(true); }
   if (d.view) return viewPhoto(d.view);
@@ -427,6 +441,13 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.id === 'scanfile' && e.target.files[0]) scanFile(e.target.files[0]);
   if (e.target.id === 'photofile' && e.target.files[0]) uploadPhoto(e.target.files[0]).catch((x) => { status = 'Photo failed (' + x.message + ').'; render(); });
+});
+// filter the quick-add list in place (re-rendering would steal focus from the input)
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'qf') return;
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('.qrow').forEach((r) => (r.hidden = q && !r.dataset.q.includes(q)));
+  document.querySelectorAll('.qgroup').forEach((g) => (g.hidden = !g.querySelector('.qrow:not([hidden])')));
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'q') handlers.search(); });
 let installEv;
