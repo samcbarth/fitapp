@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-03 20:42 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-04 04:41 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -30,7 +30,6 @@ let found = null; // food search/scan result being portioned: {name, per100: {ca
 let results = []; // food search results
 let qmul = 1; // quick-add serving multiplier
 const foodOf = ([name, qty, cal, p, c, f]) => ({ name, qty, cal, p, c, f });
-let wIn = null; // working weight counter value
 
 const localDay = (ts) => new Date(ts).toLocaleDateString('en-CA');
 const todayKey = () => new Date().toLocaleDateString('en-CA');
@@ -109,23 +108,25 @@ const sleepOk = (s) => { const b = s.bed < '12:00' ? '24' + s.bed : s.bed; retur
 
 // ---------- views ----------
 function dashboard() {
-  const t = todayKey(), food = of('food', t), tr = trend(), sl = lastSleep();
-  return card('Today', bar('Calories', sum(food, (f) => f.cal), calTarget(), 'cal', true)
-    + bar('Protein', sum(food, (f) => f.p), profile.protein, 'g')
-    + bar('Water', sum(of('water', t), (r) => r.value), profile.water, 'oz')
-    + `<div class="mrow stat"><span>Sleep</span><b>${sl ? `${sl.bed} to ${sl.wake} · ${hoursOf(sl)} h ${sleepOk(sl) ? '✓' : '✗'}` : 'not logged'}</b></div>`
-    + `<div class="mrow stat"><span>Weight (7-day avg)</span><b>${tr ? `${tr.avg} lb · ${tr.toGo} to go` : 'not logged'}</b></div>`
-    + `<div class="mrow stat"><span>Lifting volume</span><b>${volumeByDay()[t] || 0} lb</b></div>`);
+  const t = todayKey(), food = of('food', t), left = calTarget() - sum(food, (f) => f.cal);
+  const tile = (label, v, sub, over) => `<div class="tile${over ? ' over' : ''}"><b>${r0(v)}</b><span>${label}</span><small>${sub}</small></div>`;
+  return `<div class="tiles">${tile('cal left', Math.abs(left), left < 0 ? 'over target' : `of ${calTarget()}`, left < 0)}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`;
 }
 
-function weightCard() {
-  const saved = of('weight', todayKey()).at(-1);
-  if (wIn == null) wIn = of('weight').at(-1)?.value || 0;
-  return card('Weight today', `<div class="ctr">
-      <button class="pm" data-wstep="-1" aria-label="minus">-</button>
-      <input id="in-weight" type="number" inputmode="decimal" step="0.1" value="${wIn}">
-      <button class="pm" data-wstep="1" aria-label="plus">+</button></div>
-    <div class="row"><button class="btn" data-act="wsave">Save lb</button></div>
+// weight: carries the last value forward. volume: today's manual lifting total (preset sets add on top).
+const COUNTERS = {
+  weight: { label: 'Weight today', unit: 'lb', step: 1, start: () => of('weight').at(-1)?.value || 0 },
+  volume: { label: 'Weight volume', unit: 'lb', step: 25, start: () => of('volume', todayKey()).at(-1)?.value || 0 },
+};
+const cIn = {}; // working counter values
+function counterCard(id) {
+  const c = COUNTERS[id], saved = of(id, todayKey()).at(-1);
+  if (cIn[id] == null) cIn[id] = c.start();
+  return card(c.label, `<div class="ctr">
+      <button class="pm" data-cstep="${id}:-1" aria-label="minus">-</button>
+      <input id="in-${id}" type="number" inputmode="decimal" value="${cIn[id]}">
+      <button class="pm" data-cstep="${id}:1" aria-label="plus">+</button></div>
+    <div class="row"><button class="btn" data-csave="${id}">Save ${c.unit}</button></div>
     <div class="mute">${saved ? 'Last saved ' + fmtTime(saved.ts) + ': ' + saved.value : 'Not saved today'}</div>`);
 }
 
@@ -257,7 +258,7 @@ async function enablePush() {
 }
 
 const views = {
-  today: () => dashboard() + weightCard() + presetsCard() + waterCard() + logList((r) => ['set', 'weight', 'volume', 'water'].includes(r.metric), "Today's log", `volume ${volumeByDay()[todayKey()] || 0} lb`),
+  today: () => dashboard() + counterCard('weight') + counterCard('volume') + presetsCard() + waterCard() + logList((r) => ['set', 'weight', 'volume', 'water'].includes(r.metric), "Today's log", `volume ${volumeByDay()[todayKey()] || 0} lb`),
   food: foodView,
   body: bodyView,
   charts: () => { const tr = weightByDay(), c = foodByDay('cal'), pr = foodByDay('p'); return chart('Weight', tr, 'lb', profile.goal) + chart('Calories', c, 'cal', calTarget()) + chart('Protein', pr, 'g', profile.protein) + chart('Lifting volume', volumeByDay(), 'lb'); },
@@ -387,7 +388,6 @@ const val = (s) => $(s)?.value.trim() ?? '';
 const num = (s) => parseFloat(val(s)) || 0;
 
 const handlers = {
-  wsave() { const v = parseFloat(val('#in-weight')); if (isNaN(v)) return; wIn = v; add({ metric: 'weight', value: v }, 'Saved.'); },
   scan() { $('#scanfile').click(); },
   search() { const q = val('#q'); if (q) searchFood(q); },
   fdclose() { found = null; render(true); },
@@ -412,7 +412,8 @@ document.addEventListener('click', (e) => {
   if (!t) return;
   const d = t.dataset;
   if (d.tab) { tab = d.tab; status = ''; editing = null; return render(true); }
-  if (d.wstep) { wIn = +((parseFloat(val('#in-weight')) || 0) + +d.wstep).toFixed(1); $('#in-weight').value = wIn; return; }
+  if (d.cstep) { const [id, dir] = d.cstep.split(':'); cIn[id] = Math.max(0, +((parseFloat(val('#in-' + id)) || 0) + dir * COUNTERS[id].step).toFixed(1)); $('#in-' + id).value = cIn[id]; return; }
+  if (d.csave) { const id = d.csave, v = parseFloat(val('#in-' + id)); if (isNaN(v)) return; cIn[id] = v; document.activeElement.blur(); return add({ metric: id, value: v }, 'Saved.'); }
   if (d.log) { const p = presets.find((x) => x.id === d.log); return p && add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: +(p.weight * p.reps).toFixed(1) }, 'Logged ' + p.name + '.'); }
   if (d.water) return add({ metric: 'water', value: +d.water }, `+${d.water} oz water.`);
   // count changes update in place so the list keeps its scroll position
@@ -467,7 +468,7 @@ $('#ver').textContent = 'Version ' + VERSION;
   const m = new URLSearchParams(location.search).get('m');
   if (['food', 'body'].includes(m)) tab = m;
   render(true);
-  const el = m === 'weight' && $('#in-weight');
+  const el = COUNTERS[m] && $('#in-' + m);
   if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); el.select(); }
 }
 sync().then(() => render());

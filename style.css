@@ -78,3 +78,10 @@ label.mute{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;margin-
 .qcount .mute{flex:1}
 .qcount b{min-width:56px;text-align:center;font-size:32px}
 .pm.sm{flex:0 0 64px;height:64px;font-size:34px}
+/* simple today tiles */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 8px;text-align:center;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:30px;color:var(--acc)}
+.tile span{font-size:16px}
+.tile small{color:var(--mute);font-size:14px}
+.tile.over b{color:#e5484d}

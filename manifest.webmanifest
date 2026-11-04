@@ -42,7 +42,21 @@
       ]
     },
     {
-      "name": "Log food", "short_name": "Food", "url": "/fitapp/?m=food",
+      "name": "Log volume",
+      "short_name": "Volume",
+      "url": "/fitapp/?m=volume",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Log food",
+      "short_name": "Food",
+      "url": "/fitapp/?m=food",
       "icons": [
         {
           "src": "icon-192.png",
