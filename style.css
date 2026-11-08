@@ -85,3 +85,36 @@ label.mute{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;margin-
 .tile span{font-size:16px}
 .tile small{color:var(--mute);font-size:14px}
 .tile.over b{color:#e5484d}
+/* charts: timeline, axes, crosshair */
+.grid6{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:12px}
+.grid6 .chip{padding:12px 0;font-size:17px}
+.tl input[type=range]{width:100%;padding:0;border:0;background:none;accent-color:var(--acc);height:36px}
+.tlr{display:flex;justify-content:space-between;gap:8px;margin-bottom:4px}
+.chd{margin-bottom:6px;min-height:58px}
+.cv b{font-size:30px}
+.cs .dn{color:#3fb950}.cs .up{color:#e5484d}
+svg.chart{display:block;touch-action:pan-y;user-select:none;-webkit-user-select:none}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .ax{fill:var(--mute);font-size:11px;font-family:system-ui,sans-serif}
+svg .tg{stroke:var(--mute);stroke-dasharray:4 4}
+svg .ln{fill:none;stroke:var(--acc);stroke-width:2.5;stroke-linejoin:round}
+svg .dot,svg .mk{fill:var(--acc)}
+svg .xh{stroke:var(--fg);stroke-width:1}
+svg .xd{fill:var(--fg);stroke:var(--bg);stroke-width:2}
+/* activity grid */
+.acts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;text-align:center}
+.acts b{display:block;font-size:28px;color:var(--acc)}
+.acts span{font-size:15px;color:var(--mute)}
+.hscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:6px}
+.hscroll svg{display:block}
+rect.l0,i.l0{fill:var(--bg);background:var(--bg);stroke:var(--line);border:1px solid var(--line)}
+rect.l1,i.l1{fill:rgba(255,122,26,.3);background:rgba(255,122,26,.3)}
+rect.l2,i.l2{fill:rgba(255,122,26,.55);background:rgba(255,122,26,.55)}
+rect.l3,i.l3{fill:rgba(255,122,26,.8);background:rgba(255,122,26,.8)}
+rect.l4,i.l4{fill:var(--acc);background:var(--acc)}
+rect.td{stroke:var(--fg);stroke-width:1.5}
+rect.sel{stroke:#fff;stroke-width:2}
+rect[data-day]{cursor:pointer}
+.legend{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:15px}
+.lg{display:flex;align-items:center;gap:3px}
+.lg i{display:inline-block;width:13px;height:13px;border-radius:3px;box-sizing:border-box}

@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-04 04:41 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-08 16:46 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -113,21 +113,26 @@ function dashboard() {
   return `<div class="tiles">${tile('cal left', Math.abs(left), left < 0 ? 'over target' : `of ${calTarget()}`, left < 0)}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`;
 }
 
-// weight: carries the last value forward. volume: today's manual lifting total (preset sets add on top).
+// weight: carries the last value forward. volume: today's TOTAL lifting volume (preset sets + manual).
+// The saved 'volume' record holds only the manual part (total minus preset sets), so nothing double counts.
+const setsToday = () => sum(of('set', todayKey()), (r) => r.value);
 const COUNTERS = {
   weight: { label: 'Weight today', unit: 'lb', step: 1, start: () => of('weight').at(-1)?.value || 0 },
-  volume: { label: 'Weight volume', unit: 'lb', step: 25, start: () => of('volume', todayKey()).at(-1)?.value || 0 },
+  volume: { label: 'Weight volume', unit: 'lb', step: 25, start: () => volumeByDay()[todayKey()] || 0 },
 };
 const cIn = {}; // working counter values
 function counterCard(id) {
   const c = COUNTERS[id], saved = of(id, todayKey()).at(-1);
   if (cIn[id] == null) cIn[id] = c.start();
+  const note = id === 'volume'
+    ? `Presets today: ${r0(setsToday())} lb${saved ? ' · saved ' + fmtTime(saved.ts) : ''}`
+    : saved ? 'Last saved ' + fmtTime(saved.ts) + ': ' + saved.value : 'Not saved today';
   return card(c.label, `<div class="ctr">
       <button class="pm" data-cstep="${id}:-1" aria-label="minus">-</button>
       <input id="in-${id}" type="number" inputmode="decimal" value="${cIn[id]}">
       <button class="pm" data-cstep="${id}:1" aria-label="plus">+</button></div>
     <div class="row"><button class="btn" data-csave="${id}">Save ${c.unit}</button></div>
-    <div class="mute">${saved ? 'Last saved ' + fmtTime(saved.ts) + ': ' + saved.value : 'Not saved today'}</div>`);
+    <div class="mute">${note}</div>`);
 }
 
 function waterCard() {
@@ -202,17 +207,131 @@ function bodyView() {
   return wt + sleep + waterCard() + meas + pics;
 }
 
-function chart(label, byDay, unit, target) {
-  const days = Object.keys(byDay).sort().slice(-30);
-  if (days.length < 2) return card(label, '<div class="mute">Need 2+ days of data.</div>');
-  const vals = days.map((d) => byDay[d]);
-  const all = target ? vals.concat(target) : vals;
-  const lo = Math.min(...all), hi = Math.max(...all), span = hi - lo || 1;
-  const W = 320, H = 120, P = 8, y = (v) => H - P - ((v - lo) / span) * (H - 2 * P);
-  const pts = vals.map((v, i) => [P + (i * (W - 2 * P)) / (vals.length - 1), y(v)]);
-  const tl = target ? `<line x1="${P}" x2="${W - P}" y1="${y(target)}" y2="${y(target)}" stroke="#8b91a1" stroke-dasharray="4 4"/>` : '';
-  return card(label, `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${label} chart">${tl}<polyline fill="none" stroke="#ff7a1a" stroke-width="2" points="${pts.map((p) => p.join(',')).join(' ')}"/>${pts.map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="#ff7a1a"/>`).join('')}</svg>
-    <div class="mute">min ${r0(lo)} · max ${r0(hi)} · latest ${r0(vals.at(-1))} ${unit}${target ? ` · dashed = target ${r0(target)}` : ''}</div>`, `${days[0]} to ${days.at(-1)}`);
+// ---------- charts: shared time window (range chips + pan slider), axes, drag-to-read crosshair ----------
+let range = 30, back = 0; // days shown (0 = all), days panned back from today
+const RANGES = [[7, '1W'], [30, '1M'], [90, '3M'], [180, '6M'], [365, '1Y'], [0, 'All']];
+const dayDiff = (a, b) => Math.round((new Date(b + 'T12:00') - new Date(a + 'T12:00')) / 864e5);
+const fmtDay = (d, yr) => new Date(d + 'T12:00').toLocaleDateString([], yr ? { month: 'short', year: '2-digit' } : { month: 'short', day: 'numeric' });
+const fmtLong = (d) => new Date(d + 'T12:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+const firstDay = () => live().reduce((m, r) => { const d = localDay(r.ts); return d < m ? d : m; }, todayKey());
+function win() {
+  const t = todayKey(), f = firstDay();
+  if (!range) return { start: f < t ? f : dayAdd(t, -6), end: t, maxBack: 0 };
+  const maxBack = Math.max(0, dayDiff(f, t) + 1 - range);
+  back = Math.min(back, maxBack);
+  const end = dayAdd(t, -back);
+  return { start: dayAdd(end, -range + 1), end, maxBack };
+}
+function niceTicks(lo, hi, n = 4) {
+  const raw = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const out = [];
+  for (let v = Math.floor(lo / step) * step; v <= Math.ceil(hi / step) * step + step / 2; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+const fmtNum = (v) => (Math.abs(v) >= 10000 ? (v / 1000).toFixed(0) + 'k' : Math.abs(v) >= 1000 ? (v / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(+v.toFixed(1)));
+
+const CH = []; // per-chart crosshair data, rebuilt every draw
+const CW = 340, CHH = 200, CL = 46, CR = 10, CT = 12, CB = 26;
+function chart(label, byDay, unit, { target, kind = 'bar', dec = 0 } = {}) {
+  const { start, end } = win(), n = dayDiff(start, end) + 1, pw = CW - CL - CR, ph = CHH - CT - CB;
+  const days = Object.keys(byDay).filter((d) => d >= start && d <= end).sort();
+  if (!days.length) return card(label, `<div class="mute">Nothing logged ${fmtDay(start)} to ${fmtDay(end)}.</div>`);
+  const vals = days.map((d) => byDay[d]), fv = (v) => (+v).toFixed(dec);
+  let lo = kind === 'bar' ? 0 : Math.min(...vals), hi = Math.max(...vals, kind === 'bar' ? target || 0 : -Infinity);
+  if (hi === lo) { lo -= 1; hi += 1; }
+  const ticks = niceTicks(lo, hi); lo = ticks[0]; hi = ticks.at(-1);
+  const x = (d) => CL + ((dayDiff(start, d) + 0.5) * pw) / n, y = (v) => CT + ph - ((v - lo) / (hi - lo)) * ph;
+  const yr = n > 200;
+  let g = ticks.map((v) => `<line class="gl" x1="${CL}" x2="${CW - CR}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${CL - 6}" y="${y(v) + 4}" text-anchor="end">${fmtNum(v)}</text>`).join('');
+  const xt = n === 1 ? [start] : [0, 1, 2, 3].map((i) => dayAdd(start, Math.round((i * (n - 1)) / 3)));
+  g += [...new Set(xt)].map((d, i, a) => `<text class="ax" x="${x(d)}" y="${CHH - 8}" text-anchor="${i === 0 && a.length > 1 ? 'start' : i === a.length - 1 && a.length > 1 ? 'end' : 'middle'}">${fmtDay(d, yr)}</text>`).join('');
+  if (target && target >= lo && target <= hi) g += `<line class="tg" x1="${CL}" x2="${CW - CR}" y1="${y(target)}" y2="${y(target)}"/>`;
+  const pts = days.map((d, i) => ({ d, v: vals[i], px: x(d), py: y(vals[i]) }));
+  if (kind === 'bar') {
+    const bw = Math.max(1.5, (pw / n) * 0.7);
+    g += pts.map((p) => `<rect class="mk" x="${p.px - bw / 2}" y="${p.py}" width="${bw}" height="${Math.max(0, y(lo) - p.py)}" rx="${Math.min(2, bw / 3)}"/>`).join('');
+  } else {
+    g += `<polyline class="ln" points="${pts.map((p) => p.px + ',' + p.py).join(' ')}"/>`;
+    if (pts.length <= 60) g += pts.map((p) => `<circle class="dot" cx="${p.px}" cy="${p.py}" r="3"/>`).join('');
+  }
+  const idx = CH.length;
+  const rl = (RANGES.find(([r]) => r === range) || [])[1];
+  let summary;
+  if (kind === 'line') {
+    const ch = vals.at(-1) - vals[0], pct = vals[0] ? (ch / vals[0]) * 100 : 0;
+    summary = days.length > 1 ? `<span class="${ch < 0 ? 'dn' : ch > 0 ? 'up' : ''}">${ch > 0 ? '+' : ''}${fv(ch)} ${unit} (${pct > 0 ? '+' : ''}${pct.toFixed(1)}%)</span> ${fmtDay(days[0])} to ${fmtDay(days.at(-1))}` : fmtLong(days[0]);
+  } else summary = `avg ${fmtNum(sum(vals, (v) => v) / vals.length)} ${unit}/day on ${days.length} logged day${days.length === 1 ? '' : 's'}${target ? ` · target ${fmtNum(target)}` : ''}`;
+  const latest = `<b data-v>${fv(vals.at(-1))}</b> <span class="mute">${unit}</span>`;
+  CH.push({ pts, latest, summary, fv, unit });
+  return `<div class="card"><h2>${label}${rl && back === 0 ? ` <span class="mute">${rl}</span>` : ''}</h2>
+    <div class="chd" data-hd="${idx}"><div class="cv">${latest}</div><div class="mute cs">${summary}</div></div>
+    <svg class="chart" data-ch="${idx}" viewBox="0 0 ${CW} ${CHH}" width="100%" role="img" aria-label="${label} chart">${g}
+      <line class="xh" x1="0" x2="0" y1="${CT}" y2="${CT + ph}" visibility="hidden"/><circle class="xd" r="5" visibility="hidden"/></svg></div>`;
+}
+function chartsHtml() {
+  CH.length = 0;
+  return chart('Weight', weightByDay(), 'lb', { kind: 'line', dec: 1, target: profile.goal })
+    + chart('Calories', foodByDay('cal'), 'cal', { target: calTarget() })
+    + chart('Protein', foodByDay('p'), 'g', { target: profile.protein })
+    + chart('Lifting volume', volumeByDay(), 'lb');
+}
+const winLabel = (a, b) => { const y = (d) => (d.slice(0, 4) === todayKey().slice(0, 4) ? '' : " '" + d.slice(2, 4)); return `${fmtDay(a)}${y(a)} to ${fmtDay(b)}${y(b)}`; };
+function timelineCard() {
+  const { start, end, maxBack } = win();
+  return `<div class="card tl"><div class="grid6">${RANGES.map(([r, l]) => `<button class="chip${r === range ? ' on' : ''}" data-range="${r}">${l}</button>`).join('')}</div>
+    <input id="pan" type="range" min="0" max="${maxBack}" value="${maxBack - back}" ${maxBack ? '' : 'disabled'} aria-label="slide through time">
+    <div class="mute tlr"><span id="winlbl">${winLabel(start, end)}</span><span>${maxBack ? '← slide for earlier' : ''}</span></div>
+    <div class="mute">Drag across a chart to read any day.</div></div>`;
+}
+function scrub(svg, e) {
+  const c = CH[+svg.dataset.ch], hd = document.querySelector(`[data-hd="${svg.dataset.ch}"]`);
+  if (!c || !hd) return;
+  const b = svg.getBoundingClientRect(), mx = ((e.clientX - b.left) / b.width) * CW;
+  const p = c.pts.reduce((a, q) => (Math.abs(q.px - mx) < Math.abs(a.px - mx) ? q : a));
+  const xh = svg.querySelector('.xh'), xd = svg.querySelector('.xd');
+  xh.setAttribute('x1', p.px); xh.setAttribute('x2', p.px); xh.setAttribute('visibility', 'visible');
+  xd.setAttribute('cx', p.px); xd.setAttribute('cy', p.py); xd.setAttribute('visibility', 'visible');
+  hd.querySelector('.cv').innerHTML = `<b>${c.fv(p.v)}</b> <span class="mute">${c.unit}</span>`;
+  hd.querySelector('.cs').textContent = fmtLong(p.d);
+}
+function unscrub(svg) {
+  const c = CH[+svg.dataset.ch], hd = document.querySelector(`[data-hd="${svg.dataset.ch}"]`);
+  svg.querySelectorAll('.xh,.xd').forEach((el) => el.setAttribute('visibility', 'hidden'));
+  if (c && hd) { hd.querySelector('.cv').innerHTML = c.latest; hd.querySelector('.cs').innerHTML = c.summary; }
+}
+function bindCharts() {
+  document.querySelectorAll('svg.chart').forEach((svg) => {
+    const on = (e) => scrub(svg, e), off = () => unscrub(svg);
+    svg.addEventListener('pointerdown', on); svg.addEventListener('pointermove', on);
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((k) => svg.addEventListener(k, off));
+  });
+}
+
+// ---------- activity grid: one square per day, darker = more kinds of things logged ----------
+const CATS = { set: 'workout', volume: 'workout', weight: 'weight', food: 'food', water: 'water', sleep: 'sleep', measure: 'body', photo: 'body' };
+let actBy = {};
+function activityCard() {
+  actBy = {};
+  live().forEach((r) => { const c = CATS[r.metric]; if (c) (actBy[localDay(r.ts)] ||= new Set()).add(c); });
+  const t = todayKey(), start = dayAdd(t, -(52 * 7 + new Date(t + 'T12:00').getDay())); // Sunday, 52 weeks back
+  const S = 15, G = 3, L = 30, T = 18, cols = Math.ceil((dayDiff(start, t) + 1) / 7);
+  let cells = '', months = '';
+  for (let i = 0, d = start; d <= t; i++, d = dayAdd(d, 1)) {
+    const col = Math.floor(i / 7), row = i % 7, k = actBy[d]?.size || 0;
+    cells += `<rect class="l${Math.min(4, k)}${d === t ? ' td' : ''}" x="${L + col * (S + G)}" y="${T + row * (S + G)}" width="${S}" height="${S}" rx="3" data-day="${d}"/>`;
+    if (row === 0 && +d.slice(8) <= 7 && col < cols - 1) months += `<text class="ax" x="${L + col * (S + G)}" y="12">${fmtDay(d, d.slice(5, 7) === '01')}</text>`;
+  }
+  const wd = [[1, 'Mon'], [3, 'Wed'], [5, 'Fri']].map(([r, l]) => `<text class="ax" x="0" y="${T + r * (S + G) + 12}">${l}</text>`).join('');
+  const W = L + cols * (S + G), H = T + 7 * (S + G);
+  // streaks: today counts if logged, otherwise the run can still end yesterday
+  let cur = 0, best = 0, run = 0;
+  for (let d = actBy[t] ? t : dayAdd(t, -1); actBy[d]; d = dayAdd(d, -1)) cur++;
+  for (let d = start; d <= t; d = dayAdd(d, 1)) { run = actBy[d] ? run + 1 : 0; best = Math.max(best, run); }
+  const year = Object.keys(actBy).filter((d) => d >= start).length;
+  return card('Activity', `<div class="acts"><div><b>${cur}</b><span>day streak</span></div><div><b>${best}</b><span>best streak</span></div><div><b>${year}</b><span>days logged</span></div></div>
+    <div class="hscroll" id="actscroll"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="days logged over the past year">${months}${wd}${cells}</svg></div>
+    <div class="legend mute"><span id="actinfo">Tap a square to see that day.</span><span class="lg">Less ${[0, 1, 2, 3, 4].map((l) => `<i class="l${l}"></i>`).join('')} More</span></div>`, 'past year');
 }
 
 function presetEditor() {
@@ -258,10 +377,10 @@ async function enablePush() {
 }
 
 const views = {
-  today: () => dashboard() + counterCard('weight') + counterCard('volume') + presetsCard() + waterCard() + logList((r) => ['set', 'weight', 'volume', 'water'].includes(r.metric), "Today's log", `volume ${volumeByDay()[todayKey()] || 0} lb`),
+  today: () => dashboard() + counterCard('weight') + counterCard('volume') + presetsCard() + logList((r) => ['set', 'weight', 'volume', 'water'].includes(r.metric), "Today's log", `volume ${volumeByDay()[todayKey()] || 0} lb`),
   food: foodView,
   body: bodyView,
-  charts: () => { const tr = weightByDay(), c = foodByDay('cal'), pr = foodByDay('p'); return chart('Weight', tr, 'lb', profile.goal) + chart('Calories', c, 'cal', calTarget()) + chart('Protein', pr, 'g', profile.protein) + chart('Lifting volume', volumeByDay(), 'lb'); },
+  charts: () => activityCard() + timelineCard() + `<div id="charts">${chartsHtml()}</div>`,
   settings: () => profileCard() + remindCard() + presetEditor() + card('GitHub sync', `<p class="mute">Records are written to ${PATH} in the private repo ${REPO}. Paste a fine-grained token (that repo, Contents: read and write). It stays on this device.</p>
       <div class="row"><input id="tok" type="password" placeholder="github_pat_..." value="${esc(token)}"></div>
       <div class="row"><button class="btn" data-act="tok">Save token</button><button class="btn" data-act="sync">Sync now</button></div>
@@ -273,6 +392,7 @@ function render(force) {
   if (!force && document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return;
   $('#view').innerHTML = views[tab]();
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  if (tab === 'charts') { bindCharts(); const s = $('#actscroll'); if (s) s.scrollLeft = s.scrollWidth; }
 }
 
 // ---------- GitHub ----------
@@ -413,8 +533,16 @@ document.addEventListener('click', (e) => {
   const d = t.dataset;
   if (d.tab) { tab = d.tab; status = ''; editing = null; return render(true); }
   if (d.cstep) { const [id, dir] = d.cstep.split(':'); cIn[id] = Math.max(0, +((parseFloat(val('#in-' + id)) || 0) + dir * COUNTERS[id].step).toFixed(1)); $('#in-' + id).value = cIn[id]; return; }
-  if (d.csave) { const id = d.csave, v = parseFloat(val('#in-' + id)); if (isNaN(v)) return; cIn[id] = v; document.activeElement.blur(); return add({ metric: id, value: v }, 'Saved.'); }
-  if (d.log) { const p = presets.find((x) => x.id === d.log); return p && add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: +(p.weight * p.reps).toFixed(1) }, 'Logged ' + p.name + '.'); }
+  if (d.csave) {
+    const id = d.csave, v = parseFloat(val('#in-' + id)); if (isNaN(v)) return; cIn[id] = v; document.activeElement.blur();
+    return add({ metric: id, value: id === 'volume' ? +(v - setsToday()).toFixed(1) : v }, 'Saved.');
+  }
+  if (d.log) {
+    const p = presets.find((x) => x.id === d.log); if (!p) return;
+    const v = +(p.weight * p.reps).toFixed(1), cur = parseFloat(val('#in-volume'));
+    cIn.volume = +((isNaN(cur) ? COUNTERS.volume.start() : cur) + v).toFixed(1); // counter keeps any unsaved edit and adds the set
+    return add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: v }, `Logged ${p.name}${v ? ` (+${v} lb volume)` : ''}.`);
+  }
   if (d.water) return add({ metric: 'water', value: +d.water }, `+${d.water} oz water.`);
   // count changes update in place so the list keeps its scroll position
   const setCount = (n) => { qmul = Math.max(0.5, n); $('#qn').textContent = qmul; document.querySelectorAll('[data-mul]').forEach((b) => b.classList.toggle('on', +b.dataset.mul === qmul)); };
@@ -431,7 +559,8 @@ document.addEventListener('click', (e) => {
   if (d.unmeal) { if (confirm('Remove from My meals?')) { meals = meals.filter((m) => m.id !== d.unmeal); sv('fitapp.meals', meals); render(true); } return; }
   if (d.pick) { found = results[+d.pick]; results = []; return render(true); }
   if (d.view) return viewPhoto(d.view);
-  if (d.del) { if (confirm('Delete this entry?')) add({ metric: 'del', ref: d.del }, 'Deleted.'); return; }
+  if (d.del) { if (confirm('Delete this entry?')) { cIn.volume = null; add({ metric: 'del', ref: d.del }, 'Deleted.'); } return; }
+  if (d.range != null) { range = +d.range; back = 0; return render(true); }
   if (d.pedit) { editing = d.pedit; return render(true); }
   if (d.act === 'psave' || d.act === 'pdel') {
     const box = t.closest('.edit'), id = box.dataset.pid;
@@ -447,6 +576,24 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.id === 'scanfile' && e.target.files[0]) scanFile(e.target.files[0]);
   if (e.target.id === 'photofile' && e.target.files[0]) uploadPhoto(e.target.files[0]).catch((x) => { status = 'Photo failed (' + x.message + ').'; render(); });
+});
+// activity square tap: show that day's logged kinds without re-rendering
+document.addEventListener('click', (e) => {
+  const c = e.target.closest?.('rect[data-day]'), info = $('#actinfo');
+  if (!c || !info) return;
+  document.querySelectorAll('rect.sel').forEach((r) => r.classList.remove('sel'));
+  c.classList.add('sel');
+  const k = actBy[c.dataset.day];
+  info.textContent = `${fmtLong(c.dataset.day)}: ${k ? [...k].join(', ') : 'nothing logged'}`;
+});
+// timeline slider pans every chart; only the chart list re-renders so the slider keeps the drag
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'pan') return;
+  back = +e.target.max - +e.target.value;
+  const { start, end } = win();
+  $('#winlbl').textContent = winLabel(start, end);
+  $('#charts').innerHTML = chartsHtml();
+  bindCharts();
 });
 // filter the quick-add list in place (re-rendering would steal focus from the input)
 document.addEventListener('input', (e) => {
