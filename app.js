@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-16 22:10 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-16 23:30 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -35,6 +35,7 @@ let status = '';
 let editing = null; // preset id open in the Settings editor
 let found = null; // food search/scan result being portioned: {name, per100: {cal,p,c,f}, serving}
 let results = []; // food search results
+let localHits = []; // built-in foods / My meals matching the last search
 let qmul = 1; // quick-add serving multiplier
 let showSum = false; // day summary popup after check-off
 const foodOf = ([name, qty, cal, p, c, f]) => ({ name, qty, cal, p, c, f });
@@ -260,7 +261,8 @@ function foodView() {
   const find = card('Find food', `<div class="row"><button class="btn" data-act="scan">Scan barcode</button></div>
       <input id="scanfile" type="file" accept="image/*" capture="environment" hidden>
       <div class="row"><input id="q" placeholder="Search foods or type a barcode"><button class="btn half" data-act="search">Go</button></div>
-      ${results.map((x, i) => `<div class="item"><span>${esc(x.name)} <span class="mute">${r0(x.per100.cal)} cal/100g</span></span><button class="x" data-pick="${i}">Pick</button></div>`).join('')}
+      ${localHits.length ? `<h3>From your list</h3>${localHits.map((x) => `<div class="item"><span>${esc(x.name)} <span class="mute">${r0(x.f.cal)} cal</span></span><button class="x" data-quick="${esc(x.key)}">Log</button></div>`).join('')}` : ''}
+      ${results.length ? '<h3>Open Food Facts</h3>' : ''}${results.map((x, i) => `<div class="item"><span>${esc(x.name)} <span class="mute">${r0(x.per100.cal)} cal/100g</span></span><button class="x" data-pick="${i}">Pick</button></div>`).join('')}
       ${found ? portion() : ''}`);
   const manual = card('Add manually', `<input id="fm-name" placeholder="Food name">
       ${[['cal', 'p'], ['c', 'f']].map((ks) => `<div class="row">${ks.map((k) => `<input id="fm-${k}" type="number" inputmode="decimal" placeholder="${{ cal: 'calories', p: 'protein g', c: 'carbs g', f: 'fat g' }[k]}">`).join('')}</div>`).join('')}
@@ -492,20 +494,60 @@ function remindCard() {
   const on = ld('fitapp.push', false), perm = 'Notification' in window ? Notification.permission : 'unsupported';
   return card('Reminders', `<p class="mute">A Chrome notification every 3 hours, 8am to 8pm, showing what's left for water, protein, calories and your deficit. At 2pm it flags if no food is logged yet. At 9pm it nudges you to check off the day, only if you haven't.</p>
     <div class="row"><button class="btn" data-act="push">${on ? 'Re-register this phone' : 'Turn on reminders'}</button>${on ? '<button class="btn ghost" data-act="pushtest">Test</button>' : ''}</div>
-    <div class="mute">${perm === 'denied' ? 'Notifications are blocked. Allow them in Chrome site settings for this app.' : on ? 'On for this phone.' : 'Off.'}</div>`);
+    <div class="mute">${perm === 'denied' ? 'Notifications are blocked. Allow them in Chrome site settings for this app.' : ld('fitapp.pushDead', false) ? 'Not working right now. Tap Re-register this phone.' : on ? 'On for this phone. Checked and renewed automatically each time the app opens.' : 'Off.'}</div>`);
+}
+const vapidKey = () => Uint8Array.from(atob(VAPID_PUBLIC.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+// save this phone's subscription to data/push.json in the private repo (the reminder job reads it from there)
+async function saveSub(sub, why) {
+  const g = await fetch(api('data/push.json'), { headers: ghHeaders() });
+  if (!g.ok && g.status !== 404) throw new Error(`could not read data/push.json (GitHub ${g.status}${g.status === 401 || g.status === 403 ? ', token expired or missing Contents access' : ''})`);
+  const sha = g.ok ? (await g.json()).sha : undefined;
+  const body = { subscription: sub.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, updated: new Date().toISOString() };
+  const p = await fetch(api('data/push.json'), { method: 'PUT', headers: ghHeaders(), body: JSON.stringify({ message: why, content: b64(JSON.stringify(body, null, 1) + '\n'), sha }) });
+  if (!p.ok) throw new Error(`could not write data/push.json (GitHub ${p.status}${p.status === 401 || p.status === 403 ? ', token expired or missing Contents write access' : p.status === 409 ? ', file changed, tap again' : ''})`);
+  sv('fitapp.pushEndpoint', sub.endpoint);
+}
+// throw away any old subscription and make a new one: an expired one can still be returned by getSubscription()
+async function freshSub() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('this browser does not support push notifications');
+  const reg = await navigator.serviceWorker.ready;
+  const old = await reg.pushManager.getSubscription();
+  if (old) await old.unsubscribe().catch(() => {});
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidKey() });
 }
 async function enablePush() {
   if (!token) { status = 'Add a token first; the reminder job reads your subscription from the private repo.'; return render(); }
-  if (await Notification.requestPermission() !== 'granted') { status = 'Notifications not allowed.'; return render(true); }
-  const reg = await navigator.serviceWorker.ready;
-  const key = Uint8Array.from(atob(VAPID_PUBLIC.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-  const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }));
-  const g = await fetch(api('data/push.json'), { headers: ghHeaders() });
-  const sha = g.ok ? (await g.json()).sha : undefined;
-  const body = { subscription: sub.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, updated: new Date().toISOString() };
-  const p = await fetch(api('data/push.json'), { method: 'PUT', headers: ghHeaders(), body: JSON.stringify({ message: 'register push subscription', content: b64(JSON.stringify(body, null, 1) + '\n'), sha }) });
-  if (!p.ok) { status = 'Could not save subscription (' + p.status + '). Check the token.'; return render(true); }
-  sv('fitapp.push', true); status = 'Reminders on.'; render(true);
+  if (!('Notification' in window)) { status = 'This browser does not support notifications. Open the app in Chrome.'; return render(true); }
+  if (await Notification.requestPermission() !== 'granted') { status = 'Notifications not allowed. Allow them in Chrome site settings for this app, then tap again.'; return render(true); }
+  status = 'Registering this phone...'; render();
+  await saveSub(await freshSub(), 'register push subscription');
+  sv('fitapp.push', true); sv('fitapp.pushDead', false); status = 'Reminders on. Tap Test to send one through the reminder job.'; render(true);
+}
+// On every app open: if the reminder job reported the subscription dead (HTTP 410), or Chrome rotated it,
+// make a new one and save it, so reminders fix themselves without a trip to Settings.
+async function healPush() {
+  if (!token || !ld('fitapp.push', false) || !('Notification' in window) || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
+  try {
+    const g = await fetch(api('data/push.json'), { headers: { ...ghHeaders(), Accept: 'application/vnd.github.raw' }, cache: 'no-store' });
+    const remote = g.ok ? await g.json() : null;
+    const reg = await navigator.serviceWorker.ready;
+    const cur = await reg.pushManager.getSubscription();
+    const why = !remote ? 'no subscription saved in the repo' : remote.dead ? `the reminder job got "${remote.dead}"`
+      : !cur ? 'Chrome dropped the subscription' : remote.subscription?.endpoint !== cur.endpoint ? 'Chrome changed the subscription' : '';
+    if (!why) { sv('fitapp.pushDead', false); return; }
+    await saveSub(await freshSub(), 'renew push subscription (' + why + ')');
+    sv('fitapp.pushDead', false); status = `Reminders were broken (${why}). Re-registered this phone automatically.`; render();
+  } catch (e) { sv('fitapp.pushDead', true); status = 'Reminders need attention: ' + e.message + '. Open Settings > Reminders.'; render(); }
+}
+// real test: ask GitHub to run the reminder job now with a test message (same path as the scheduled reminders)
+async function testPush() {
+  if (!token) { status = 'Add a token first.'; return render(); }
+  status = 'Asking the reminder job to send a test...'; render();
+  const r = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/remind.yml/dispatches`, { method: 'POST', headers: ghHeaders(), body: JSON.stringify({ ref: 'main', inputs: { test: 'yes' } }) });
+  if (r.status === 204) { status = 'Test sent to the reminder job. A notification should arrive in about 30 to 60 seconds. If it does not, tap Re-register this phone.'; return render(true); }
+  const why = r.status === 403 || r.status === 404 ? 'your token cannot start workflows. Give it Actions: Read and write on fitapp-data, or use the GitHub Actions tab > remind > Run workflow' : r.status === 401 ? 'token expired' : 'unexpected error';
+  status = `Could not start the reminder job (GitHub ${r.status}: ${why}). Showing a local preview instead.`; render(true);
+  (await navigator.serviceWorker.ready).showNotification('FitApp check-in', { body: 'Local preview only. This did not go through the reminder job.', icon: 'icon-192.png', tag: 'remind' });
 }
 
 const views = {
@@ -599,22 +641,47 @@ const fromOff = (p) => {
   const n = p.nutriments || {};
   return { name: [p.product_name, p.brands].filter(Boolean).join(' · ') || 'Unnamed food', per100: { cal: +n['energy-kcal_100g'] || 0, p: +n.proteins_100g || 0, c: +n.carbohydrates_100g || 0, f: +n.fat_100g || 0 }, serving: +p.serving_quantity || null };
 };
+// fetch JSON from Open Food Facts with a timeout and one retry when the server is busy (it rate limits searches)
+async function offGet(url) {
+  for (let i = 0; i < 2; i++) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 12000);
+    let r;
+    try { r = await fetch(url, { signal: ctl.signal }); }
+    catch (e) {
+      // a busy Open Food Facts answers 503 without CORS headers, which the browser reports as a network error
+      if (e.name !== 'AbortError' && navigator.onLine && i === 0) { await new Promise((ok) => setTimeout(ok, 2500)); continue; }
+      throw new Error(e.name === 'AbortError' ? 'Open Food Facts took over 12 seconds to answer' : navigator.onLine ? 'could not reach Open Food Facts, it is probably busy (it limits searches to about 10 a minute). Wait a minute and try again' : 'you are offline');
+    } finally { clearTimeout(t); }
+    if ((r.status === 503 || r.status === 429) && i === 0) { await new Promise((ok) => setTimeout(ok, 2500)); continue; }
+    if (r.status === 503 || r.status === 429) throw new Error(`Open Food Facts is busy (HTTP ${r.status}), it limits searches to about 10 a minute. Wait a minute and try again`);
+    if (!r.ok) throw new Error(`Open Food Facts returned HTTP ${r.status}`);
+    try { return await r.json(); } catch { throw new Error('Open Food Facts sent back something that is not JSON'); }
+  }
+}
+// built-in foods and My meals whose name contains every word of the query
+function localMatches(q) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (txt) => words.every((w) => txt.toLowerCase().includes(w));
+  return meals.filter((m) => hit(m.name)).map((m) => ({ key: 'm:' + m.id, name: m.name, f: m }))
+    .concat(FOOD_GROUPS.flatMap(([g, items]) => items.map((it, i) => ({ key: `f:${g}:${i}`, name: it[0], g, f: foodOf(it) })).filter((x) => hit(x.name + ' ' + x.g))));
+}
 async function lookupBarcode(code) {
   status = 'Looking up ' + code + '...'; render();
   try {
-    const j = await fetch(`${OFF}/api/v2/product/${code}.json?fields=product_name,brands,nutriments,serving_quantity`).then((r) => r.json());
-    if (j.status !== 1 || !j.product) { status = 'Barcode not found. Add it manually.'; return render(); }
+    const j = await offGet(`${OFF}/api/v2/product/${code}.json?fields=product_name,brands,nutriments,serving_quantity`);
+    if (j.status !== 1 || !j.product) { status = `Barcode ${code} is not in Open Food Facts. Add it manually below.`; return render(); }
     found = fromOff(j.product); results = []; status = ''; render(true);
-  } catch { status = 'Lookup failed. Check connection.'; render(); }
+  } catch (e) { status = 'Barcode lookup failed: ' + e.message + '.'; render(); }
 }
 async function searchFood(q) {
   if (/^\d{8,14}$/.test(q)) return lookupBarcode(q);
-  status = 'Searching...'; render();
+  localHits = localMatches(q).slice(0, 8);
+  status = 'Searching...'; results = []; found = null; render(true);
   try {
-    const j = await fetch(`${OFF}/cgi/search.pl?search_terms=${encodeURIComponent(q)}&json=1&page_size=12&fields=product_name,brands,nutriments,serving_quantity`).then((r) => r.json());
+    const j = await offGet(`${OFF}/cgi/search.pl?search_terms=${encodeURIComponent(q)}&json=1&page_size=12&fields=product_name,brands,nutriments,serving_quantity`);
     results = (j.products || []).map(fromOff).filter((x) => x.per100.cal);
-    found = null; status = results.length ? '' : 'No matches.'; render(true);
-  } catch { status = 'Search failed. Check connection.'; render(); }
+    status = results.length || localHits.length ? '' : `No matches for "${q}". Try fewer words or add it manually.`; render(true);
+  } catch (e) { status = 'Online search failed: ' + e.message + '.' + (localHits.length ? ' Showing matches from your list.' : ''); render(true); }
 }
 async function scanFile(file) {
   if (!('BarcodeDetector' in window)) { status = 'Scanner not supported on this browser. Type the barcode number instead.'; return render(); }
@@ -673,7 +740,7 @@ const handlers = {
   tok() { token = val('#tok'); sv('fitapp.token', token); status = 'Token saved.'; render(true); sync().then(() => render()); },
   sync() { sync().then(() => render()); },
   push() { enablePush().catch((e) => { status = 'Reminders failed (' + e.message + ').'; render(true); }); },
-  async pushtest() { (await navigator.serviceWorker.ready).showNotification('FitApp check-in', { body: 'This is what reminders look like.', icon: 'icon-192.png', tag: 'remind' }); },
+  pushtest() { testPush().catch((e) => { status = 'Test failed (' + e.message + ').'; render(true); }); },
 };
 
 document.addEventListener('click', (e) => {
@@ -777,4 +844,5 @@ $('#ver').textContent = 'Version ' + VERSION;
   if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); el.select(); }
 }
 sync().then(() => render());
+healPush();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
