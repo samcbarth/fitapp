@@ -6,8 +6,9 @@ const FOOD_GROUPS = [
   ['Chick-fil-A', [
     ['Chick-fil-A Chicken Sandwich', '1 sandwich', 420, 29, 41, 18],
     ['Waffle Potato Fries, large', '1 large', 600, 7, 72, 31],
+    ['Waffle fry, single', '1 fry', 12, 0.1, 1.4, 0.6],
     ['Nuggets, 12 count', '12 nuggets', 380, 40, 16, 17],
-    ['Nugget', '1 nugget', 32, 3.3, 1.3, 1.4],
+    ['Nugget, single', '1 nugget', 32, 3.3, 1.3, 1.4],
     ['Sweet tea, large (32 oz)', '1 large', 240, 0, 60, 0],
     ['Chick-fil-A Sauce', '1 packet', 140, 0, 6, 13],
   ]],
