@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-17 00:05 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-17 00:30 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -35,6 +35,7 @@ let status = '';
 let editing = null; // preset id open in the Settings editor
 let found = null; // food search/scan result being portioned: {name, per100: {cal,p,c,f}, serving}
 let results = []; // food search results
+let lastFood = null; // food totals at the last Food tab render, to show +/- after each entry
 let localHits = []; // built-in foods / My meals matching the last search
 let qmul = 1; // quick-add serving multiplier
 let showSum = false; // day summary popup after check-off
@@ -248,8 +249,23 @@ function logList(filter, title, sub) {
 
 function foodView() {
   const t = todayKey(), food = of('food', t);
-  const totals = card('Food today', bar('Calories', sum(food, (f) => f.cal), foodTarget(t), 'cal', true) + bar('Protein', sum(food, (f) => f.p), profile.protein, 'g')
-    + `<div class="mute">Carbs ${r0(sum(food, (f) => f.c))} g · Fat ${r0(sum(food, (f) => f.f))} g</div>`);
+  // big running totals pinned to the top of the Food tab, so every quick-add tap shows its effect
+  const cal = r0(sum(food, (f) => f.cal)), prot = r0(sum(food, (f) => f.p)), tgt = foodTarget(t), left = tgt - cal;
+  const changed = lastFood && lastFood.day === t && (cal !== lastFood.cal || prot !== lastFood.prot);
+  if (changed) lastFood.d = { cal: cal - lastFood.cal, prot: prot - lastFood.prot, at: Date.now() };
+  const d = lastFood?.d && Date.now() - lastFood.d.at < 3000 ? lastFood.d : null; // keep the +/- up through the sync re-render
+  const dCal = d ? d.cal : 0, dProt = d ? d.prot : 0;
+  lastFood = { day: t, cal, prot, d: lastFood?.d };
+  const delta = (d, u) => (d ? `<em class="delta${d < 0 ? ' neg' : ''}">${d > 0 ? '+' : ''}${d.toLocaleString()}${u}</em>` : '');
+  const pct = (v, g) => Math.min(100, g ? (v / g) * 100 : 0);
+  const totals = `<div class="card ftot${changed ? ' bump' : ''}">
+      <div class="ftrow">
+        <div class="ftcell${left < 0 ? ' over' : ''}"><small>Calories</small><b>${cal.toLocaleString()}${delta(dCal, '')}</b><span>of ${tgt.toLocaleString()} · ${left < 0 ? `<span class="neg">${(-left).toLocaleString()} over</span>` : `${left.toLocaleString()} left`}</span>
+          <div class="bar"><div style="width:${pct(cal, tgt)}%;${left < 0 ? 'background:#e5484d' : ''}"></div></div></div>
+        <div class="ftcell"><small>Protein</small><b>${prot}<i>g</i>${delta(dProt, 'g')}</b><span>of ${profile.protein} g · ${Math.max(0, profile.protein - prot)} to go</span>
+          <div class="bar"><div style="width:${pct(prot, profile.protein)}%"></div></div></div>
+      </div>
+      <div class="mute">Carbs ${r0(sum(food, (f) => f.c))} g · Fat ${r0(sum(food, (f) => f.f))} g · ${food.length} item${food.length === 1 ? '' : 's'}</div></div>`;
   const row = (key, name, sub, f, extra = '') => `<div class="qrow" data-q="${esc((name + ' ' + sub).toLowerCase())}"><button class="qbtn" data-quick="${esc(key)}"><b>${esc(name)}</b><span>${f.qty ? esc(f.qty) + ' · ' : ''}${macroLine(f)}</span></button>${extra}</div>`;
   const groups = (meals.length ? [['My meals', meals.map((m) => row('m:' + m.id, m.name, 'my meals', m, `<button class="x" data-unmeal="${m.id}" aria-label="remove">✕</button>`))]] : [])
     .concat(FOOD_GROUPS.map(([g, items]) => [g, items.map((it, i) => row(`f:${g}:${i}`, it[0], g, foodOf(it)))]));

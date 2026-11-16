@@ -130,3 +130,17 @@ rect.cal-miss,i.cal-miss{fill:var(--bg);background:var(--bg);stroke:var(--line);
 rect[data-cday]{cursor:pointer}
 .lg i.cal-done,.lg i.cal-part{margin-left:6px}
 .row>button.btn{flex:1 1 0;width:auto;min-width:0}
+/* Food tab: big running totals pinned to the top while scrolling the food list */
+.ftot{position:sticky;top:0;z-index:5;box-shadow:0 6px 14px rgba(0,0,0,.45)}
+.ftrow{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:6px}
+.ftcell{display:flex;flex-direction:column;min-width:0}
+.ftcell small{color:var(--mute);font-size:15px;font-weight:600}
+.ftcell b{display:block;transform-origin:left center;font-size:38px;line-height:1.1;color:var(--acc);white-space:nowrap}
+.ftcell b i{font-style:normal;font-size:22px;margin-left:2px}
+.ftcell span{font-size:15px;color:var(--fg)}
+.ftcell.over b{color:#e5484d}
+.ftot .delta{font-style:normal;font-size:17px;font-weight:700;color:#3fb950;margin-left:6px;vertical-align:middle;animation:fade 2.5s forwards}
+.ftot .delta.neg{color:#e5484d}
+.ftot.bump b{animation:pop .45s ease-out}
+@keyframes pop{0%{transform:scale(1.18)}100%{transform:scale(1)}}
+@keyframes fade{0%,70%{opacity:1}100%{opacity:0}}
