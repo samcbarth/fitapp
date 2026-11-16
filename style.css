@@ -79,7 +79,7 @@ label.mute{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;margin-
 .qcount b{min-width:56px;text-align:center;font-size:32px}
 .pm.sm{flex:0 0 64px;height:64px;font-size:34px}
 /* simple today tiles */
-.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 8px;text-align:center;display:flex;flex-direction:column;gap:2px}
 .tile b{font-size:30px;color:var(--acc)}
 .tile span{font-size:16px}
@@ -118,3 +118,15 @@ rect[data-day]{cursor:pointer}
 .legend{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:15px}
 .lg{display:flex;align-items:center;gap:3px}
 .lg i{display:inline-block;width:13px;height:13px;border-radius:3px;box-sizing:border-box}
+/* deficit and daily check-off */
+.neg,.acts b.neg{color:#e5484d}
+.okc{color:#3fb950}
+svg .mk.neg{fill:#e5484d}
+.card.sum{border-color:var(--acc)}
+.card.sum .item b{font-weight:700}
+rect.cal-done,i.cal-done{fill:#3fb950;background:#3fb950}
+rect.cal-part,i.cal-part{fill:rgba(255,122,26,.55);background:rgba(255,122,26,.55)}
+rect.cal-miss,i.cal-miss{fill:var(--bg);background:var(--bg);stroke:var(--line);border:1px solid var(--line)}
+rect[data-cday]{cursor:pointer}
+.lg i.cal-done,.lg i.cal-part{margin-left:6px}
+.row>button.btn{flex:1 1 0;width:auto;min-width:0}

@@ -1,14 +1,20 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-08 16:46 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-16 21:30 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
 // Presets: one tap logs a 'set' record. value = weight x reps (lifting volume); walks have weight 0.
+// kind + min drive the calories-burned estimate; cal (optional) overrides it.
 const DEFAULT_PRESETS = [
-  { id: 'kb-press', name: 'KB overhead/chest press', weight: 25, reps: 30, unit: 'reps' },
-  { id: 'walk-block', name: 'Walk around block', weight: 0, reps: 1, unit: 'lap' },
+  { id: 'kb-press', name: 'KB overhead/chest press', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
+  { id: 'walk-block', name: 'Walk around block', weight: 0, reps: 1, unit: 'lap', kind: 'walk', min: 5, cal: null },
 ];
-const DEFAULT_PROFILE = { sex: 'male', age: 35, heightIn: 70, activity: 1.375, deficit: 750, goal: 200, protein: 200, water: 100, bed: '22:00', wake: '06:00' };
+// deficitPct: food target is this percent below maintenance. floor: food target never goes below this.
+const DEFAULT_PROFILE = { sex: 'male', age: 35, heightIn: 70, activity: 1.375, deficitPct: 15, floor: 1000, goal: 200, protein: 200, water: 100, bed: '22:00', wake: '06:00' };
+// Day check-off started on this date. Earlier days with food logged count as complete so old history is kept.
+const CHECKOFF_START = '2026-11-16';
+// Exercise intensity (METs). Burn = (MET - 1) x kg x hours: the resting 1 MET is already inside maintenance.
+const KINDS = { lift: ['Lifting', 5], walk: ['Walking', 3.5], cardio: ['Hard cardio', 7] };
 // Web push: the remind workflow in the private repo signs pushes with the matching private key (repo secret VAPID_PRIVATE)
 const VAPID_PUBLIC = 'BDJBvsujB4sHc0Cou0F-vXKVtnIGygMA_lC0E1hJq5GVuzM_c6o5Xxjj1V0k2AYzrAXABv-zQdE5xNpJ0SP-Fxg';
 const PARTS =['Waist', 'Chest', 'Hips', 'Neck', 'Arm', 'Thigh'];
@@ -19,7 +25,8 @@ const sv = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch
 // records: {id, ts, metric, value, synced, ...extra}
 // metrics: weight, volume (legacy), set, food {name,qty,cal,p,c,f}, water (oz), sleep {bed,wake}, measure {part}, photo {path}, del {ref} (tombstone)
 let records = ld(KEY, []);
-let presets = ld('fitapp.presets', DEFAULT_PRESETS);
+// older saved presets have no kind/min: walks get 5 minute laps, everything else 3 minutes of lifting
+let presets = ld('fitapp.presets', DEFAULT_PRESETS).map((p) => ({ kind: /walk/i.test(p.name) || p.weight === 0 ? 'walk' : 'lift', min: /walk/i.test(p.name) || p.weight === 0 ? 5 : 3, cal: null, ...p }));
 let meals = ld('fitapp.meals', []); // saved foods: {id,name,qty,cal,p,c,f}
 let profile = { ...DEFAULT_PROFILE, ...ld('fitapp.profile', {}) };
 let token = ld('fitapp.token', '');
@@ -29,6 +36,7 @@ let editing = null; // preset id open in the Settings editor
 let found = null; // food search/scan result being portioned: {name, per100: {cal,p,c,f}, serving}
 let results = []; // food search results
 let qmul = 1; // quick-add serving multiplier
+let showSum = false; // day summary popup after check-off
 const foodOf = ([name, qty, cal, p, c, f]) => ({ name, qty, cal, p, c, f });
 
 const localDay = (ts) => new Date(ts).toLocaleDateString('en-CA');
@@ -73,22 +81,79 @@ function trend() {
   return { avg: +avg.toFixed(1), perWeek: perWeek == null ? null : +perWeek.toFixed(1), toGo: +toGo.toFixed(1), eta };
 }
 
-// maintenance calories: Mifflin-St Jeor, blended toward an adaptive estimate as food logs accumulate
+// ---------- calories burned from workout presets ----------
+const bodyKg = () => (trend()?.avg || of('weight').at(-1)?.value || 200) * 0.4536;
+const estBurn = (kind, min) => r0(((KINDS[kind] || KINDS.lift)[1] - 1) * bodyKg() * ((+min || 0) / 60));
+const presetBurn = (p) => (p.cal != null && p.cal !== '' ? +p.cal : estBurn(p.kind, p.min));
+// burn stored on each set when logged; older sets without one are estimated from their preset now
+const burnOf = (r) => r.burn ?? (() => { const p = presets.find((x) => x.id === r.preset) || presets.find((x) => x.name === r.name); return p ? presetBurn(p) : 0; })();
+const burnByDay = () => { const o = {}; of('set').forEach((r) => { const d = localDay(r.ts); o[d] = (o[d] || 0) + burnOf(r); }); return o; };
+
+// ---------- day check-off ----------
+// complete = checked off, or (before check-off existed) any food logged that day. No backfill: check-off is for today only.
+const doneDays = () => new Set(of('done').map((r) => r.day || localDay(r.ts)));
+function completeDays() {
+  const s = doneDays();
+  Object.keys(foodByDay('cal')).forEach((d) => { if (d < CHECKOFF_START) s.add(d); });
+  return s;
+}
+const isDone = (d = todayKey()) => doneDays().has(d);
+function streak() {
+  const s = completeDays(), t = todayKey();
+  let n = 0;
+  for (let d = s.has(t) ? t : dayAdd(t, -1); s.has(d); d = dayAdd(d, -1)) n++;
+  return n;
+}
+
+// maintenance calories: Mifflin-St Jeor, blended toward an adaptive estimate as complete days accumulate.
+// Adaptive = food eaten - exercise burned + weight change, so maintenance means "before logged workouts" and burn is never counted twice.
 function tdee() {
   const p = profile, kg = (trend()?.avg || 0) * 0.4536, cm = p.heightIn * 2.54;
   const formula = r0((10 * kg + 6.25 * cm - 5 * p.age + (p.sex === 'male' ? 5 : -161)) * p.activity);
-  const cal = foodByDay('cal'), w = weightByDay(), t = todayKey();
-  const logged = Object.keys(cal).filter((d) => d > dayAdd(t, -28) && d < t);
+  const cal = foodByDay('cal'), burn = burnByDay(), w = weightByDay(), t = todayKey(), done = completeDays();
+  const logged = Object.keys(cal).filter((d) => d > dayAdd(t, -28) && d < t && done.has(d));
   const wd = Object.keys(w).filter((d) => d > dayAdd(t, -28)).sort();
   if (logged.length < 14 || wd.length < 6) return { value: formula, formula, adaptive: null, logged: logged.length };
-  const avgIn = sum(logged, (d) => cal[d]) / logged.length;
+  const avgIn = sum(logged, (d) => cal[d] - (burn[d] || 0)) / logged.length;
   const head = wd.slice(0, 3), tail = wd.slice(-3), span = (new Date(tail[1]) - new Date(head[1])) / 864e5 || 1; // between window midpoints
   const lost = sum(head, (d) => w[d]) / 3 - sum(tail, (d) => w[d]) / 3;
   const adaptive = r0(avgIn + (lost * 3500) / span);
   const k = Math.min(1, logged.length / 28);
   return { value: r0(formula * (1 - k) + adaptive * k), formula, adaptive, logged: logged.length };
 }
-const calTarget = () => tdee().value - profile.deficit;
+// food target: deficitPct below maintenance, never under the floor. Exercise does not raise it.
+const calTarget = () => Math.max(+profile.floor || 0, r0(tdee().value * (1 - (+profile.deficitPct || 0) / 100)));
+const deficitGoal = () => tdee().value - calTarget();
+
+// per-day numbers: maintenance + burned - eaten = deficit (positive is good)
+function dayStats(d, maint = tdee().value, cal = foodByDay('cal'), burn = burnByDay()) {
+  const eaten = r0(cal[d] || 0), burned = r0(burn[d] || 0);
+  return { eaten, burned, maint, deficit: maint + burned - eaten };
+}
+const deficitByDay = () => {
+  const m = tdee().value, cal = foodByDay('cal'), burn = burnByDay(), o = {};
+  completeDays().forEach((d) => (o[d] = dayStats(d, m, cal, burn).deficit));
+  return o;
+};
+// this week (Monday start): complete days plus today in progress
+function weekStats() {
+  const t = todayKey(), mon = dayAdd(t, -((new Date(t + 'T12:00').getDay() + 6) % 7));
+  const m = tdee().value, cal = foodByDay('cal'), burn = burnByDay(), done = completeDays(), goal = deficitGoal();
+  let total = 0, counted = 0, skipped = 0;
+  for (let d = mon; d <= t; d = dayAdd(d, 1)) {
+    if (done.has(d) || d === t) { total += dayStats(d, m, cal, burn).deficit; counted++; } else skipped++;
+  }
+  return { total, counted, skipped, goal: goal * 7, pace: goal * counted, start: mon };
+}
+// projected vs actual loss over the last 28 days: logged deficit / 3500 vs the scale
+function projected() {
+  const t = todayKey(), from = dayAdd(t, -28), def = deficitByDay(), w = weightByDay();
+  const days = Object.keys(def).filter((d) => d > from && d < t);
+  if (!days.length) return null;
+  const wd = Object.keys(w).filter((d) => d > from).sort();
+  const actual = wd.length >= 2 ? +(w[wd.at(-1)] - w[wd[0]]).toFixed(1) : null;
+  return { days: days.length, total: r0(sum(days, (d) => def[d])), lb: +(-sum(days, (d) => def[d]) / 3500).toFixed(1), actual };
+}
 
 const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -108,9 +173,30 @@ const sleepOk = (s) => { const b = s.bed < '12:00' ? '24' + s.bed : s.bed; retur
 
 // ---------- views ----------
 function dashboard() {
-  const t = todayKey(), food = of('food', t), left = calTarget() - sum(food, (f) => f.cal);
+  const t = todayKey(), food = of('food', t), target = calTarget(), left = target - sum(food, (f) => f.cal), st = dayStats(t), dg = deficitGoal();
   const tile = (label, v, sub, over) => `<div class="tile${over ? ' over' : ''}"><b>${r0(v)}</b><span>${label}</span><small>${sub}</small></div>`;
-  return `<div class="tiles">${tile('cal left', Math.abs(left), left < 0 ? 'over target' : `of ${calTarget()}`, left < 0)}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`;
+  return `<div class="tiles">${tile('cal left', Math.abs(left), left < 0 ? 'over target' : `of ${target}`, left < 0)}${tile(st.deficit < 0 ? 'cal surplus' : 'deficit', Math.abs(st.deficit), `goal ${dg}${st.burned ? ` · +${st.burned} burned` : ''}`, st.deficit < 0)}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`
+    + (showSum ? summaryCard() : '') + checkoffCard();
+}
+const signed = (n) => (n > 0 ? '+' : '') + r0(n);
+function checkoffCard() {
+  const done = isDone(), wk = weekStats(), s = streak(), food = of('food', todayKey()).length;
+  const btn = done
+    ? `<div class="row"><button class="btn ghost" data-act="uncheck">Undo check-off</button><button class="btn ghost" data-act="sumopen">Day summary</button></div><div class="mute">Today is checked off. Anything you log now still counts.</div>`
+    : `<div class="row"><button class="btn" data-act="checkoff">Check off today</button></div><div class="mute">${food ? `${food} food entr${food === 1 ? 'y' : 'ies'} so far.` : 'No food logged yet.'} Check off tonight once everything you ate is in. Unchecked days don't count, and the day locks at midnight.</div>`;
+  return card('Daily log', `<div class="acts"><div><b>${s}</b><span>day streak</span></div><div><b class="${wk.total < 0 ? 'neg' : ''}">${signed(wk.total)}</b><span>week deficit</span></div><div><b>${r0(wk.goal)}</b><span>week goal</span></div></div>
+    ${bar('Week so far', Math.max(0, wk.total), wk.goal, 'cal')}
+    <div class="mute">On pace: ${r0(wk.pace)} by today (${wk.counted} day${wk.counted === 1 ? '' : 's'}).${wk.skipped ? ` ${wk.skipped} missed day${wk.skipped === 1 ? '' : 's'} left out.` : ''}</div>${btn}`, done ? 'checked off' : 'not checked off');
+}
+function summaryCard() {
+  const st = dayStats(todayKey()), wk = weekStats(), dg = deficitGoal();
+  const row = (l, v) => `<div class="item"><span>${l}</span><b>${v}</b></div>`;
+  return `<div class="card sum"><h2>Day checked off</h2>
+    ${row('Maintenance', st.maint + ' cal')}${row('Burned in workouts', '+' + st.burned + ' cal')}${row('Eaten', '-' + st.eaten + ' cal')}
+    ${row(st.deficit >= 0 ? 'Deficit' : 'Surplus', `<span class="${st.deficit >= dg ? 'okc' : st.deficit < 0 ? 'neg' : ''}">${Math.abs(st.deficit)} cal</span>`)}
+    ${row('Daily goal', dg + ' cal')}${row('Week total', `${signed(wk.total)} of ${r0(wk.goal)} cal`)}
+    <div class="mute">${st.deficit >= dg ? 'Goal hit.' : st.deficit >= 0 ? `${dg - st.deficit} cal short of the goal, still a deficit.` : 'Over maintenance today.'} About ${(st.deficit / 3500).toFixed(2)} lb.</div>
+    <div class="row"><button class="btn" data-act="sumclose">Done</button></div></div>`;
 }
 
 // weight: carries the last value forward. volume: today's TOTAL lifting volume (preset sets + manual).
@@ -139,10 +225,11 @@ function waterCard() {
   return card('Water', `<div class="grid3">${[8, 16, 24].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div>`, `${sum(of('water', todayKey()), (r) => r.value)} / ${profile.water} oz`);
 }
 
-const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))}</span></button>`).join('')}</div>`, 'tap to log');
+const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal</span></button>`).join('')}</div>`, `tap to log · ${r0(burnByDay()[todayKey()] || 0)} cal burned today`);
 
 function lineFor(r) {
-  if (r.metric === 'set') return `${esc(r.name)}: ${esc(presetLine(r))}`;
+  if (r.metric === 'set') return `${esc(r.name)}: ${esc(presetLine(r))} · ${burnOf(r)} cal`;
+  if (r.metric === 'done') return 'Day checked off';
   if (r.metric === 'food') return `${esc(r.name)} · ${macroLine(r)}`;
   if (r.metric === 'water') return `Water ${r.value} oz`;
   if (r.metric === 'sleep') return `Sleep ${r.bed} to ${r.wake}`;
@@ -189,10 +276,22 @@ function portion() {
     <div class="row"><button class="btn" data-act="fdadd">Log it</button><button class="btn ghost" data-act="fdclose">Cancel</button></div></div>`;
 }
 
+function projectedCard() {
+  const pr = projected();
+  if (!pr) return card('Projected loss', '<div class="mute">Check off days to see what your deficit should be doing to the scale.</div>', 'last 28 days');
+  const row = (l, v) => `<div class="item"><span>${l}</span><b>${v}</b></div>`;
+  const note = pr.actual == null ? 'Weigh in at least twice to compare with the scale.'
+    : pr.actual <= pr.lb ? 'The scale is keeping up with your logs.'
+    : 'The scale is behind the logs. Common causes: missed snacks or drinks, portions bigger than logged, or water weight. Give it two weeks before changing anything.';
+  return card('Projected loss', row('Logged deficit', `${signed(pr.total)} cal on ${pr.days} complete day${pr.days === 1 ? '' : 's'}`) + row('Projected', `${pr.lb > 0 ? '+' : ''}${pr.lb} lb`)
+    + row('Actual on the scale', pr.actual == null ? 'not enough weigh-ins' : `${pr.actual > 0 ? '+' : ''}${pr.actual} lb`) + `<div class="mute">3500 cal is about 1 lb. Missed days are not in the projection. ${note}</div>`, 'last 28 days');
+}
+
 function bodyView() {
   const tr = trend(), sl = lastSleep();
   const wt = card('Weight trend', tr ? `<div class="big">${tr.avg} lb</div><div class="mute">7-day average · goal ${profile.goal} lb · ${tr.toGo} lb to go</div>
-      <div class="mute">${tr.perWeek == null ? 'Rate needs 3+ weigh-ins in 28 days.' : `${tr.perWeek > 0 ? '+' : ''}${tr.perWeek} lb/week`}${tr.eta ? ` · goal around ${tr.eta}` : ''}</div>` : '<div class="mute">Log your weight on Today.</div>');
+      <div class="mute">${tr.perWeek == null ? 'Rate needs 3+ weigh-ins in 28 days.' : `${tr.perWeek > 0 ? '+' : ''}${tr.perWeek} lb/week`}${tr.eta ? ` · goal around ${tr.eta}` : ''}</div>` : '<div class="mute">Log your weight on Today.</div>')
+    + projectedCard();
   const sleep = card('Sleep last night', `<div class="row"><label class="mute">Bed<input id="sl-bed" type="time" value="${sl?.bed || profile.bed}"></label><label class="mute">Up<input id="sl-wake" type="time" value="${sl?.wake || profile.wake}"></label></div>
       <div class="row"><button class="btn" data-act="sleep">Save sleep</button></div>
       <div class="mute">Target: bed by ${profile.bed}, up by ${profile.wake}.${sl ? ` Logged ${hoursOf(sl)} h ${sleepOk(sl) ? 'on target' : 'off target'}.` : ''}</div>`);
@@ -238,7 +337,7 @@ function chart(label, byDay, unit, { target, kind = 'bar', dec = 0 } = {}) {
   const days = Object.keys(byDay).filter((d) => d >= start && d <= end).sort();
   if (!days.length) return card(label, `<div class="mute">Nothing logged ${fmtDay(start)} to ${fmtDay(end)}.</div>`);
   const vals = days.map((d) => byDay[d]), fv = (v) => (+v).toFixed(dec);
-  let lo = kind === 'bar' ? 0 : Math.min(...vals), hi = Math.max(...vals, kind === 'bar' ? target || 0 : -Infinity);
+  let lo = kind === 'bar' ? Math.min(0, ...vals) : Math.min(...vals), hi = Math.max(...vals, kind === 'bar' ? target || 0 : -Infinity);
   if (hi === lo) { lo -= 1; hi += 1; }
   const ticks = niceTicks(lo, hi); lo = ticks[0]; hi = ticks.at(-1);
   const x = (d) => CL + ((dayDiff(start, d) + 0.5) * pw) / n, y = (v) => CT + ph - ((v - lo) / (hi - lo)) * ph;
@@ -250,7 +349,8 @@ function chart(label, byDay, unit, { target, kind = 'bar', dec = 0 } = {}) {
   const pts = days.map((d, i) => ({ d, v: vals[i], px: x(d), py: y(vals[i]) }));
   if (kind === 'bar') {
     const bw = Math.max(1.5, (pw / n) * 0.7);
-    g += pts.map((p) => `<rect class="mk" x="${p.px - bw / 2}" y="${p.py}" width="${bw}" height="${Math.max(0, y(lo) - p.py)}" rx="${Math.min(2, bw / 3)}"/>`).join('');
+    const y0 = y(Math.max(lo, 0)); // bars grow from zero, up or down
+    g += pts.map((p) => `<rect class="mk${p.v < 0 ? ' neg' : ''}" x="${p.px - bw / 2}" y="${Math.min(p.py, y0)}" width="${bw}" height="${Math.abs(y0 - p.py)}" rx="${Math.min(2, bw / 3)}"/>`).join('');
   } else {
     g += `<polyline class="ln" points="${pts.map((p) => p.px + ',' + p.py).join(' ')}"/>`;
     if (pts.length <= 60) g += pts.map((p) => `<circle class="dot" cx="${p.px}" cy="${p.py}" r="3"/>`).join('');
@@ -272,7 +372,9 @@ function chart(label, byDay, unit, { target, kind = 'bar', dec = 0 } = {}) {
 function chartsHtml() {
   CH.length = 0;
   return chart('Weight', weightByDay(), 'lb', { kind: 'line', dec: 1, target: profile.goal })
+    + chart('Deficit (complete days)', deficitByDay(), 'cal', { target: deficitGoal() })
     + chart('Calories', foodByDay('cal'), 'cal', { target: calTarget() })
+    + chart('Burned in workouts', burnByDay(), 'cal')
     + chart('Protein', foodByDay('p'), 'g', { target: profile.protein })
     + chart('Lifting volume', volumeByDay(), 'lb');
 }
@@ -334,14 +436,42 @@ function activityCard() {
     <div class="legend mute"><span id="actinfo">Tap a square to see that day.</span><span class="lg">Less ${[0, 1, 2, 3, 4].map((l) => `<i class="l${l}"></i>`).join('')} More</span></div>`, 'past year');
 }
 
+// ---------- logging calendar: checked off / partly logged (food but no check-off) / missed ----------
+let calBy = {};
+function logCalendarCard() {
+  const done = completeDays(), food = foodByDay('cal'), t = todayKey();
+  const start = dayAdd(t, -(26 * 7 + new Date(t + 'T12:00').getDay())); // Sunday, 26 weeks back
+  const S = 15, G = 3, L = 30, T = 18, cols = Math.ceil((dayDiff(start, t) + 1) / 7);
+  let cells = '', months = '', nDone = 0, nPart = 0, nMiss = 0;
+  calBy = {};
+  for (let i = 0, d = start; d <= t; i++, d = dayAdd(d, 1)) {
+    const col = Math.floor(i / 7), row = i % 7;
+    const s = done.has(d) ? 'done' : food[d] ? 'part' : 'miss';
+    calBy[d] = d === t && s !== 'done' ? 'today, not checked off yet' : { done: 'checked off', part: 'food logged but not checked off', miss: 'nothing logged' }[s];
+    if (d !== t) { if (s === 'done') nDone++; else if (s === 'part') nPart++; else if (d >= firstDay()) nMiss++; }
+    cells += `<rect class="cal-${s}${d === t ? ' td' : ''}" x="${L + col * (S + G)}" y="${T + row * (S + G)}" width="${S}" height="${S}" rx="3" data-cday="${d}"/>`;
+    if (row === 0 && +d.slice(8) <= 7 && col < cols - 1) months += `<text class="ax" x="${L + col * (S + G)}" y="12">${fmtDay(d, d.slice(5, 7) === '01')}</text>`;
+  }
+  const wd = [[1, 'Mon'], [3, 'Wed'], [5, 'Fri']].map(([r, l]) => `<text class="ax" x="0" y="${T + r * (S + G) + 12}">${l}</text>`).join('');
+  const W = L + cols * (S + G), H = T + 7 * (S + G);
+  return card('Logging calendar', `<div class="acts"><div><b>${nDone}</b><span>complete</span></div><div><b>${nPart}</b><span>partial</span></div><div><b>${nMiss}</b><span>missed</span></div></div>
+    <div class="hscroll calscroll"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="checked off days">${months}${wd}${cells}</svg></div>
+    <div class="legend mute"><span id="calinfo">Tap a square to see that day.</span><span class="lg"><i class="cal-done"></i> done <i class="cal-part"></i> partial <i class="cal-miss"></i> missed</span></div>`, 'past 6 months');
+}
+
 function presetEditor() {
   const row = (p) => editing === p.id
     ? `<div class="edit" data-pid="${p.id}">
         <input data-f="name" value="${esc(p.name)}" placeholder="Name">
         <div class="row"><input data-f="weight" type="number" inputmode="decimal" value="${p.weight}" placeholder="lb"><input data-f="reps" type="number" inputmode="decimal" value="${p.reps}" placeholder="reps"><input data-f="unit" value="${esc(p.unit)}" placeholder="unit"></div>
+        <label class="mute">Type<select data-f="kind">${Object.entries(KINDS).map(([k, [l]]) => `<option value="${k}"${p.kind === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <div class="row"><label class="mute">Minutes per tap<input data-f="min" type="number" inputmode="decimal" value="${p.min ?? ''}"></label>
+          <label class="mute">Calories<input data-f="cal" type="number" inputmode="decimal" value="${p.cal ?? ''}" placeholder="auto"></label></div>
+        <div class="mute">Leave Calories blank to use the estimate (${estBurn(p.kind, p.min)} cal now).</div>
         <div class="row"><button class="btn" data-act="psave">Save</button><button class="btn ghost" data-act="pdel">Delete</button></div></div>`
-    : `<div class="item"><span>${esc(p.name)} · <span class="mute">${esc(presetLine(p))}</span></span><button class="x" data-pedit="${p.id}">Edit</button></div>`;
-  return card('Workout presets', presets.map(row).join('') + '<div class="row" style="margin-top:12px"><button class="btn" data-act="padd">Add preset</button></div>');
+    : `<div class="item"><span>${esc(p.name)} · <span class="mute">${esc(presetLine(p))} · ${presetBurn(p)} cal${p.cal != null && p.cal !== '' ? ' (set)' : ' (auto)'}</span></span><button class="x" data-pedit="${p.id}">Edit</button></div>`;
+  return card('Workout presets', presets.map(row).join('') + `<div class="row" style="margin-top:12px"><button class="btn" data-act="padd">Add preset</button></div>
+    <div class="mute">Calories burned are estimated from your current weight, the exercise type and the minutes one tap takes. Leave Calories blank to keep the estimate updating as you lose weight.</div>`);
 }
 
 function profileCard() {
@@ -349,16 +479,16 @@ function profileCard() {
   const f = (k, label, type = 'number') => `<label class="mute">${label}<input data-pf="${k}" type="${type}" ${type === 'number' ? 'inputmode="decimal"' : ''} value="${esc(p[k])}"></label>`;
   return card('Targets and profile', `<div class="row"><label class="mute">Sex<select data-pf="sex"><option value="male"${p.sex === 'male' ? ' selected' : ''}>Male</option><option value="female"${p.sex === 'female' ? ' selected' : ''}>Female</option></select></label>${f('age', 'Age')}${f('heightIn', 'Height (in)')}</div>
     <label class="mute">Activity<select data-pf="activity">${[[1.2, 'Desk, little exercise'], [1.375, 'Light exercise 1-3 days'], [1.55, 'Moderate 3-5 days'], [1.725, 'Hard 6-7 days']].map(([v, l]) => `<option value="${v}"${+p.activity === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-    <div class="row">${f('goal', 'Goal lb')}${f('deficit', 'Deficit cal')}</div>
+    <div class="row">${f('goal', 'Goal lb')}${f('deficitPct', 'Deficit %')}${f('floor', 'Min cal')}</div>
     <div class="row">${f('protein', 'Protein g')}${f('water', 'Water oz')}</div>
     <div class="row">${f('bed', 'Bed by', 'time')}${f('wake', 'Up by', 'time')}</div>
     <div class="row"><button class="btn" data-act="profile">Save targets</button></div>
-    <div class="mute">Maintenance ${td.value} cal (formula ${td.formula}${td.adaptive ? `, from your logs ${td.adaptive}` : `; adapts after 14 days of food logs, have ${td.logged}`}). Daily target ${calTarget()} cal.</div>`);
+    <div class="mute">Maintenance ${td.value} cal (formula ${td.formula}${td.adaptive ? `, from your logs ${td.adaptive}` : `; adapts after 14 complete days, have ${td.logged}`}). Food target ${calTarget()} cal (${p.deficitPct}% under, never below ${p.floor}). Daily deficit goal ${deficitGoal()} cal, plus whatever workouts burn. Workout calories are not added back to the food target.</div>`);
 }
 
 function remindCard() {
   const on = ld('fitapp.push', false), perm = 'Notification' in window ? Notification.permission : 'unsupported';
-  return card('Reminders', `<p class="mute">A Chrome notification every 3 hours, 8am to 8pm, showing what's left for water, protein, calories and lifting.</p>
+  return card('Reminders', `<p class="mute">A Chrome notification every 3 hours, 8am to 8pm, showing what's left for water, protein, calories and your deficit. At 2pm it flags if no food is logged yet. At 9pm it nudges you to check off the day, only if you haven't.</p>
     <div class="row"><button class="btn" data-act="push">${on ? 'Re-register this phone' : 'Turn on reminders'}</button>${on ? '<button class="btn ghost" data-act="pushtest">Test</button>' : ''}</div>
     <div class="mute">${perm === 'denied' ? 'Notifications are blocked. Allow them in Chrome site settings for this app.' : on ? 'On for this phone.' : 'Off.'}</div>`);
 }
@@ -380,7 +510,7 @@ const views = {
   today: () => dashboard() + counterCard('weight') + counterCard('volume') + presetsCard() + logList((r) => ['set', 'weight', 'volume', 'water'].includes(r.metric), "Today's log", `volume ${volumeByDay()[todayKey()] || 0} lb`),
   food: foodView,
   body: bodyView,
-  charts: () => activityCard() + timelineCard() + `<div id="charts">${chartsHtml()}</div>`,
+  charts: () => logCalendarCard() + activityCard() + timelineCard() + `<div id="charts">${chartsHtml()}</div>`,
   settings: () => profileCard() + remindCard() + presetEditor() + card('GitHub sync', `<p class="mute">Records are written to ${PATH} in the private repo ${REPO}. Paste a fine-grained token (that repo, Contents: read and write). It stays on this device.</p>
       <div class="row"><input id="tok" type="password" placeholder="github_pat_..." value="${esc(token)}"></div>
       <div class="row"><button class="btn" data-act="tok">Save token</button><button class="btn" data-act="sync">Sync now</button></div>
@@ -392,7 +522,7 @@ function render(force) {
   if (!force && document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return;
   $('#view').innerHTML = views[tab]();
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  if (tab === 'charts') { bindCharts(); const s = $('#actscroll'); if (s) s.scrollLeft = s.scrollWidth; }
+  if (tab === 'charts') { bindCharts(); document.querySelectorAll('#actscroll,.calscroll').forEach((s) => (s.scrollLeft = s.scrollWidth)); }
 }
 
 // ---------- GitHub ----------
@@ -403,12 +533,14 @@ const api = (p) => `https://api.github.com/repos/${REPO}/contents/${p}`;
 
 // data/today.json: tiny summary for home-screen widgets and the reminder job
 async function putSummary(headers) {
-  const day = todayKey(), food = of('food', day), sl = lastSleep();
-  const body = { date: day, weight: trend()?.avg ?? null, volume: volumeByDay()[day] || 0, cal: r0(sum(food, (f) => f.cal)), cal_target: calTarget(), protein: r0(sum(food, (f) => f.p)), protein_target: profile.protein, water: sum(of('water', day), (r) => r.value), water_target: profile.water, sleep_ok: sl ? sleepOk(sl) : null, updated: new Date().toISOString() };
+  const day = todayKey(), food = of('food', day), sl = lastSleep(), st = dayStats(day), wk = weekStats();
+  const body = { date: day, weight: trend()?.avg ?? null, volume: volumeByDay()[day] || 0, cal: r0(sum(food, (f) => f.cal)), cal_target: calTarget(), protein: r0(sum(food, (f) => f.p)), protein_target: profile.protein, water: sum(of('water', day), (r) => r.value), water_target: profile.water, sleep_ok: sl ? sleepOk(sl) : null,
+    food_count: food.length, burned: st.burned, deficit: st.deficit, deficit_goal: deficitGoal(), week_deficit: r0(wk.total), week_goal: r0(wk.goal), checked_off: isDone(day), streak: streak(), updated: new Date().toISOString() };
   const g = await fetch(api('data/today.json'), { headers });
+  if (!g.ok && g.status !== 404) throw new Error(`could not read data/today.json (GitHub ${g.status}${g.status === 401 || g.status === 403 ? ', token expired or missing Contents access' : ''})`);
   const sha = g.ok ? (await g.json()).sha : undefined;
   const p = await fetch(api('data/today.json'), { method: 'PUT', headers, body: JSON.stringify({ message: 'update today summary', content: b64(JSON.stringify(body, null, 1) + '\n'), sha }) });
-  if (!p.ok) throw new Error('summary ' + p.status);
+  if (!p.ok) throw new Error(`could not write data/today.json (GitHub ${p.status}${p.status === 409 || p.status === 422 ? ', changed on another device, will retry next sync' : p.status === 401 || p.status === 403 ? ', token expired or missing Contents write access' : ''}). Reminders use this file, so they may be out of date`);
 }
 
 async function sync() {
@@ -520,7 +652,22 @@ const handlers = {
     document.querySelectorAll('[data-pf]').forEach((el) => { const k = el.dataset.pf; profile[k] = ['sex', 'bed', 'wake'].includes(k) ? el.value : parseFloat(el.value) || DEFAULT_PROFILE[k]; });
     sv('fitapp.profile', profile); status = 'Targets saved.'; render(true);
   },
-  padd() { const p = { id: 'p' + Date.now(), name: 'New preset', weight: 0, reps: 10, unit: 'reps' }; presets.push(p); sv('fitapp.presets', presets); editing = p.id; render(true); },
+  checkoff() {
+    if (isDone()) return;
+    if (!of('food', todayKey()).length && !confirm('No food is logged today. Check off anyway? The day will count as 0 calories eaten.')) return;
+    showSum = true;
+    add({ metric: 'done', day: todayKey(), value: 1 }, 'Day checked off.');
+  },
+  uncheck() {
+    const recs = of('done').filter((r) => (r.day || localDay(r.ts)) === todayKey());
+    if (!recs.length || !confirm('Undo today\'s check-off?')) return;
+    showSum = false;
+    recs.forEach((r) => records.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: new Date().toISOString(), metric: 'del', ref: rkey(r), synced: false }));
+    sv(KEY, records); status = 'Check-off undone.'; render(true); sync().then(() => render());
+  },
+  sumopen() { showSum = true; render(true); },
+  sumclose() { showSum = false; render(true); },
+  padd() { const p = { id: 'p' + Date.now(), name: 'New preset', weight: 0, reps: 10, unit: 'reps', kind: 'lift', min: 3, cal: null }; presets.push(p); sv('fitapp.presets', presets); editing = p.id; render(true); },
   tok() { token = val('#tok'); sv('fitapp.token', token); status = 'Token saved.'; render(true); sync().then(() => render()); },
   sync() { sync().then(() => render()); },
   push() { enablePush().catch((e) => { status = 'Reminders failed (' + e.message + ').'; render(true); }); },
@@ -541,7 +688,8 @@ document.addEventListener('click', (e) => {
     const p = presets.find((x) => x.id === d.log); if (!p) return;
     const v = +(p.weight * p.reps).toFixed(1), cur = parseFloat(val('#in-volume'));
     cIn.volume = +((isNaN(cur) ? COUNTERS.volume.start() : cur) + v).toFixed(1); // counter keeps any unsaved edit and adds the set
-    return add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: v }, `Logged ${p.name}${v ? ` (+${v} lb volume)` : ''}.`);
+    const burn = presetBurn(p);
+    return add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: v, burn }, `Logged ${p.name}${v ? ` (+${v} lb volume)` : ''}, about ${burn} cal burned.`);
   }
   if (d.water) return add({ metric: 'water', value: +d.water }, `+${d.water} oz water.`);
   // count changes update in place so the list keeps its scroll position
@@ -567,7 +715,7 @@ document.addEventListener('click', (e) => {
     if (d.act === 'pdel') { if (!confirm('Delete preset?')) return; presets = presets.filter((p) => p.id !== id); }
     else {
       const f = (k) => box.querySelector(`[data-f="${k}"]`).value.trim();
-      Object.assign(presets.find((x) => x.id === id), { name: f('name') || 'Preset', weight: parseFloat(f('weight')) || 0, reps: parseFloat(f('reps')) || 0, unit: f('unit') || 'reps' });
+      Object.assign(presets.find((x) => x.id === id), { name: f('name') || 'Preset', weight: parseFloat(f('weight')) || 0, reps: parseFloat(f('reps')) || 0, unit: f('unit') || 'reps', kind: f('kind') || 'lift', min: parseFloat(f('min')) || 0, cal: f('cal') === '' ? null : parseFloat(f('cal')) || 0 });
     }
     sv('fitapp.presets', presets); editing = null; status = 'Presets saved.'; return render(true);
   }
@@ -585,6 +733,14 @@ document.addEventListener('click', (e) => {
   c.classList.add('sel');
   const k = actBy[c.dataset.day];
   info.textContent = `${fmtLong(c.dataset.day)}: ${k ? [...k].join(', ') : 'nothing logged'}`;
+});
+// logging calendar tap: show that day's status
+document.addEventListener('click', (e) => {
+  const c = e.target.closest?.('rect[data-cday]'), info = $('#calinfo');
+  if (!c || !info) return;
+  document.querySelectorAll('rect.sel').forEach((r) => r.classList.remove('sel'));
+  c.classList.add('sel');
+  info.textContent = `${fmtLong(c.dataset.cday)}: ${calBy[c.dataset.cday] || 'nothing logged'}`;
 });
 // timeline slider pans every chart; only the chart list re-renders so the slider keeps the drag
 document.addEventListener('input', (e) => {

@@ -1,8 +1,36 @@
 // Quick-add food list, built from Sam's DoorDash/Target/United grocery and restaurant receipts (Gmail, past year).
-// Ordered by how often each place/item showed up. Every entry is ONE piece (one pickle, one chip, one tender);
+// Chick-fil-A and Regulars are the everyday orders; the rest are ordered by how often each place/item showed up. Every entry is ONE piece (one pickle, one chip, one tender);
 // the count stepper in the app logs several. Macros are estimated from typical label/menu values.
 // [name, piece, cal, protein g, carbs g, fat g]
 const FOOD_GROUPS = [
+  ['Chick-fil-A', [
+    ['Chick-fil-A Chicken Sandwich', '1 sandwich', 420, 29, 41, 18],
+    ['Waffle Potato Fries, large', '1 large', 600, 7, 72, 31],
+    ['Nuggets, 12 count', '12 nuggets', 380, 40, 16, 17],
+    ['Nugget', '1 nugget', 32, 3.3, 1.3, 1.4],
+    ['Sweet tea, large (32 oz)', '1 large', 240, 0, 60, 0],
+    ['Chick-fil-A Sauce', '1 packet', 140, 0, 6, 13],
+  ]],
+  ['Regulars', [
+    ["Wavy Lay's chip", '1 chip', 14, 0.2, 1.4, 0.9],
+    ["Lay's Classic chip", '1 chip', 11, 0.1, 1, 0.7],
+    ['Dill pickle, whole (Vlasic Snack\'mm)', '1 pickle', 5, 0, 1, 0],
+    ['Pickle chip (Grillo\'s/Vlasic)', '1 chip', 1, 0, 0.2, 0],
+    ['Pickle spear', '1 spear', 4, 0, 1, 0],
+    ['Pico de gallo', '1 tbsp', 5, 0.1, 1, 0],
+    ['Sharp cheddar slice', '1 slice', 80, 5, 0, 7],
+    ['Cheddar cube (1 inch)', '1 cube', 70, 4, 0.2, 5.7],
+    ['Shredded cheese', '1 tbsp', 28, 1.8, 0.2, 2.3],
+    ['French fry (any restaurant)', '1 fry', 10, 0.1, 1.3, 0.5],
+    ['Thin cookie ($1 size)', '1 cookie', 150, 1.5, 20, 7],
+    ['Big gourmet cookie (Crumbl size)', '1 whole cookie', 720, 8, 96, 36],
+    ['Big gourmet cookie (Crumbl size)', '1/4 cookie', 180, 2, 24, 9],
+    ["Hershey's milk chocolate bar", '1 bar (1.55 oz)', 210, 3, 26, 13],
+    ["Hershey's bar square", '1 square', 18, 0.25, 2.2, 1.1],
+    ['Fun-size candy bar', '1 bar', 90, 1.5, 11, 4.5],
+    ['M&M or chocolate chip', '1 piece', 4, 0, 0.6, 0.2],
+    ["Reese's cup", '1 cup', 105, 2, 11, 6.5],
+  ]],
   ['Popeyes', [
     ['Classic tender', '1 tender', 148, 13, 9, 7],
     ['Chicken breast (bone-in)', '1 piece', 380, 35, 16, 20],
@@ -59,13 +87,9 @@ const FOOD_GROUPS = [
     ['Simply Watermelon juice', '1 cup (8 oz)', 120, 0, 29, 0],
   ]],
   ['Snacks', [
-    ["Lay's chip (Classic or Wavy)", '1 chip', 11, 0.1, 1, 0.7],
     ["Miss Vickie's Jalapeno chip", '1 chip', 12, 0.2, 1.5, 0.6],
     ['Ranch dip (Hidden Valley + sour cream)', '1 tbsp', 30, 0.5, 1, 2.5],
     ['Sour cream', '1 tbsp', 30, 0.5, 0.5, 2.5],
-    ['Dill pickle, whole (Vlasic Snack\'mm)', '1 pickle', 5, 0, 1, 0],
-    ['Pickle chip (Grillo\'s/Vlasic)', '1 chip', 1, 0, 0.2, 0],
-    ['Pickle spear', '1 spear', 4, 0, 1, 0],
     ['Chips Ahoy Chunky cookie', '1 cookie', 80, 1, 10, 4],
     ['Toll House cookie dough', '1 cookie', 85, 1, 11, 4],
     ['Ben & Jerry\'s Half Baked', '1 scoop (1/2 cup)', 220, 3, 27, 11],
@@ -82,8 +106,6 @@ const FOOD_GROUPS = [
     ['Mesquite turkey breast (deli)', '1 slice', 30, 5.5, 0.5, 0.5],
     ['Oscar Mayer deli chicken breast', '1 slice', 25, 4.5, 0.5, 0.5],
     ['Bacon strip, cooked', '1 strip', 45, 3, 0, 3.5],
-    ['Sharp cheddar slice', '1 slice', 80, 5, 0, 7],
-    ['Shredded cheese', '1 tbsp', 28, 1.8, 0.2, 2.3],
     ['Homemade salsa', '1 tbsp', 3, 0, 0.6, 0],
     ['Mini cucumber', '1 cucumber', 10, 0.5, 2, 0],
     ['Tomato slice', '1 slice', 4, 0.2, 0.8, 0],
