@@ -144,3 +144,9 @@ rect[data-cday]{cursor:pointer}
 .ftot.bump b{animation:pop .45s ease-out}
 @keyframes pop{0%{transform:scale(1.18)}100%{transform:scale(1)}}
 @keyframes fade{0%,70%{opacity:1}100%{opacity:0}}
+/* Today: calorie tiles full width with big numbers */
+.tile.wide{grid-column:1/-1;padding:16px 14px}
+.tile.wide b{font-size:56px;line-height:1.05}
+.tile.wide span{font-size:20px;font-weight:600}
+.tile.wide small{font-size:16px}
+.tile.wide .bar{height:10px;margin:8px 4px 0}
