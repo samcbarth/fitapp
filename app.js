@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-16 21:30 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-16 22:10 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -124,6 +124,8 @@ function tdee() {
 // food target: deficitPct below maintenance, never under the floor. Exercise does not raise it.
 const calTarget = () => Math.max(+profile.floor || 0, r0(tdee().value * (1 - (+profile.deficitPct || 0) / 100)));
 const deficitGoal = () => tdee().value - calTarget();
+// what you can eat on a day: base target plus every calorie burned in logged workouts that day (100% eaten back)
+const foodTarget = (d = todayKey()) => calTarget() + r0(burnByDay()[d] || 0);
 
 // per-day numbers: maintenance + burned - eaten = deficit (positive is good)
 function dayStats(d, maint = tdee().value, cal = foodByDay('cal'), burn = burnByDay()) {
@@ -173,9 +175,9 @@ const sleepOk = (s) => { const b = s.bed < '12:00' ? '24' + s.bed : s.bed; retur
 
 // ---------- views ----------
 function dashboard() {
-  const t = todayKey(), food = of('food', t), target = calTarget(), left = target - sum(food, (f) => f.cal), st = dayStats(t), dg = deficitGoal();
+  const t = todayKey(), food = of('food', t), target = foodTarget(t), left = target - sum(food, (f) => f.cal), st = dayStats(t), dg = deficitGoal();
   const tile = (label, v, sub, over) => `<div class="tile${over ? ' over' : ''}"><b>${r0(v)}</b><span>${label}</span><small>${sub}</small></div>`;
-  return `<div class="tiles">${tile('cal left', Math.abs(left), left < 0 ? 'over target' : `of ${target}`, left < 0)}${tile(st.deficit < 0 ? 'cal surplus' : 'deficit', Math.abs(st.deficit), `goal ${dg}${st.burned ? ` · +${st.burned} burned` : ''}`, st.deficit < 0)}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`
+  return `<div class="tiles">${tile('cal left', Math.abs(left), left < 0 ? 'over target' : `of ${target}${st.burned ? ` (+${st.burned} earned)` : ''}`, left < 0)}${tile(st.deficit < 0 ? 'cal surplus' : 'deficit', Math.abs(st.deficit), `goal ${dg}${st.burned ? ` · +${st.burned} burned` : ''}`, st.deficit < 0)}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`
     + (showSum ? summaryCard() : '') + checkoffCard();
 }
 const signed = (n) => (n > 0 ? '+' : '') + r0(n);
@@ -194,7 +196,7 @@ function summaryCard() {
   return `<div class="card sum"><h2>Day checked off</h2>
     ${row('Maintenance', st.maint + ' cal')}${row('Burned in workouts', '+' + st.burned + ' cal')}${row('Eaten', '-' + st.eaten + ' cal')}
     ${row(st.deficit >= 0 ? 'Deficit' : 'Surplus', `<span class="${st.deficit >= dg ? 'okc' : st.deficit < 0 ? 'neg' : ''}">${Math.abs(st.deficit)} cal</span>`)}
-    ${row('Daily goal', dg + ' cal')}${row('Week total', `${signed(wk.total)} of ${r0(wk.goal)} cal`)}
+    ${row('Food target today', `${foodTarget()} cal (${calTarget()} + ${st.burned} earned)`)}${row('Daily goal', dg + ' cal')}${row('Week total', `${signed(wk.total)} of ${r0(wk.goal)} cal`)}
     <div class="mute">${st.deficit >= dg ? 'Goal hit.' : st.deficit >= 0 ? `${dg - st.deficit} cal short of the goal, still a deficit.` : 'Over maintenance today.'} About ${(st.deficit / 3500).toFixed(2)} lb.</div>
     <div class="row"><button class="btn" data-act="sumclose">Done</button></div></div>`;
 }
@@ -225,7 +227,7 @@ function waterCard() {
   return card('Water', `<div class="grid3">${[8, 16, 24].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div>`, `${sum(of('water', todayKey()), (r) => r.value)} / ${profile.water} oz`);
 }
 
-const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal</span></button>`).join('')}</div>`, `tap to log · ${r0(burnByDay()[todayKey()] || 0)} cal burned today`);
+const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal</span></button>`).join('')}</div>`, `tap to log · ${r0(burnByDay()[todayKey()] || 0)} cal earned today`);
 
 function lineFor(r) {
   if (r.metric === 'set') return `${esc(r.name)}: ${esc(presetLine(r))} · ${burnOf(r)} cal`;
@@ -245,7 +247,7 @@ function logList(filter, title, sub) {
 
 function foodView() {
   const t = todayKey(), food = of('food', t);
-  const totals = card('Food today', bar('Calories', sum(food, (f) => f.cal), calTarget(), 'cal', true) + bar('Protein', sum(food, (f) => f.p), profile.protein, 'g')
+  const totals = card('Food today', bar('Calories', sum(food, (f) => f.cal), foodTarget(t), 'cal', true) + bar('Protein', sum(food, (f) => f.p), profile.protein, 'g')
     + `<div class="mute">Carbs ${r0(sum(food, (f) => f.c))} g · Fat ${r0(sum(food, (f) => f.f))} g</div>`);
   const row = (key, name, sub, f, extra = '') => `<div class="qrow" data-q="${esc((name + ' ' + sub).toLowerCase())}"><button class="qbtn" data-quick="${esc(key)}"><b>${esc(name)}</b><span>${f.qty ? esc(f.qty) + ' · ' : ''}${macroLine(f)}</span></button>${extra}</div>`;
   const groups = (meals.length ? [['My meals', meals.map((m) => row('m:' + m.id, m.name, 'my meals', m, `<button class="x" data-unmeal="${m.id}" aria-label="remove">✕</button>`))]] : [])
@@ -373,7 +375,7 @@ function chartsHtml() {
   CH.length = 0;
   return chart('Weight', weightByDay(), 'lb', { kind: 'line', dec: 1, target: profile.goal })
     + chart('Deficit (complete days)', deficitByDay(), 'cal', { target: deficitGoal() })
-    + chart('Calories', foodByDay('cal'), 'cal', { target: calTarget() })
+    + chart('Calories', foodByDay('cal'), 'cal', { target: calTarget() }) // line is the base target; workout days allow more
     + chart('Burned in workouts', burnByDay(), 'cal')
     + chart('Protein', foodByDay('p'), 'g', { target: profile.protein })
     + chart('Lifting volume', volumeByDay(), 'lb');
@@ -483,7 +485,7 @@ function profileCard() {
     <div class="row">${f('protein', 'Protein g')}${f('water', 'Water oz')}</div>
     <div class="row">${f('bed', 'Bed by', 'time')}${f('wake', 'Up by', 'time')}</div>
     <div class="row"><button class="btn" data-act="profile">Save targets</button></div>
-    <div class="mute">Maintenance ${td.value} cal (formula ${td.formula}${td.adaptive ? `, from your logs ${td.adaptive}` : `; adapts after 14 complete days, have ${td.logged}`}). Food target ${calTarget()} cal (${p.deficitPct}% under, never below ${p.floor}). Daily deficit goal ${deficitGoal()} cal, plus whatever workouts burn. Workout calories are not added back to the food target.</div>`);
+    <div class="mute">Maintenance ${td.value} cal (formula ${td.formula}${td.adaptive ? `, from your logs ${td.adaptive}` : `; adapts after 14 complete days, have ${td.logged}`}). Base food target ${calTarget()} cal (${p.deficitPct}% under, never below ${p.floor}). Every calorie a workout preset burns is added to that day's food target, so the daily deficit goal stays ${deficitGoal()} cal whether you work out or not. Work out more, eat more.</div>`);
 }
 
 function remindCard() {
@@ -534,7 +536,7 @@ const api = (p) => `https://api.github.com/repos/${REPO}/contents/${p}`;
 // data/today.json: tiny summary for home-screen widgets and the reminder job
 async function putSummary(headers) {
   const day = todayKey(), food = of('food', day), sl = lastSleep(), st = dayStats(day), wk = weekStats();
-  const body = { date: day, weight: trend()?.avg ?? null, volume: volumeByDay()[day] || 0, cal: r0(sum(food, (f) => f.cal)), cal_target: calTarget(), protein: r0(sum(food, (f) => f.p)), protein_target: profile.protein, water: sum(of('water', day), (r) => r.value), water_target: profile.water, sleep_ok: sl ? sleepOk(sl) : null,
+  const body = { date: day, weight: trend()?.avg ?? null, volume: volumeByDay()[day] || 0, cal: r0(sum(food, (f) => f.cal)), cal_target: foodTarget(day), cal_base: calTarget(), protein: r0(sum(food, (f) => f.p)), protein_target: profile.protein, water: sum(of('water', day), (r) => r.value), water_target: profile.water, sleep_ok: sl ? sleepOk(sl) : null,
     food_count: food.length, burned: st.burned, deficit: st.deficit, deficit_goal: deficitGoal(), week_deficit: r0(wk.total), week_goal: r0(wk.goal), checked_off: isDone(day), streak: streak(), updated: new Date().toISOString() };
   const g = await fetch(api('data/today.json'), { headers });
   if (!g.ok && g.status !== 404) throw new Error(`could not read data/today.json (GitHub ${g.status}${g.status === 401 || g.status === 403 ? ', token expired or missing Contents access' : ''})`);
@@ -689,7 +691,7 @@ document.addEventListener('click', (e) => {
     const v = +(p.weight * p.reps).toFixed(1), cur = parseFloat(val('#in-volume'));
     cIn.volume = +((isNaN(cur) ? COUNTERS.volume.start() : cur) + v).toFixed(1); // counter keeps any unsaved edit and adds the set
     const burn = presetBurn(p);
-    return add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: v, burn }, `Logged ${p.name}${v ? ` (+${v} lb volume)` : ''}, about ${burn} cal burned.`);
+    return add({ metric: 'set', preset: p.id, name: p.name, weight: p.weight, reps: p.reps, unit: p.unit, value: v, burn }, `Logged ${p.name}${v ? ` (+${v} lb volume)` : ''}. +${burn} cal added to today's food.`);
   }
   if (d.water) return add({ metric: 'water', value: +d.water }, `+${d.water} oz water.`);
   // count changes update in place so the list keeps its scroll position
