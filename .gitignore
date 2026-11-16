@@ -1,0 +1,2 @@
+# per-turn Slack report written for the Stop hook, which posts and deletes it
+.claude/.slack-report.md
