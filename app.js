@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-17 01:00 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-17 01:20 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -178,11 +178,12 @@ const sleepOk = (s) => { const b = s.bed < '12:00' ? '24' + s.bed : s.bed; retur
 // ---------- views ----------
 function dashboard() {
   const t = todayKey(), food = of('food', t), target = foodTarget(t), left = target - sum(food, (f) => f.cal), st = dayStats(t), dg = deficitGoal();
-  const tile = (label, v, sub, over, cls = '', extra = '') => `<div class="tile${over ? ' over' : ''}${cls}"><b>${r0(v).toLocaleString()}</b><span>${label}</span><small>${sub}</small>${extra}</div>`;
+  const tile = (label, v, sub, over, cls = '', extra = '') => `<div class="tile${over ? ' over' : ''}${cls}"><b>${typeof v === 'string' ? v : r0(v).toLocaleString()}</b><span>${label}</span><small>${sub}</small>${extra}</div>`;
   const eaten = r0(sum(food, (f) => f.cal)), pct = Math.min(100, target ? (eaten / target) * 100 : 0);
   const calBar = `<div class="bar"><div style="width:${pct}%;${left < 0 ? 'background:#e5484d' : ''}"></div></div>`;
   // the two calorie tiles are full width with big numbers; protein and water stay side by side
-  return `<div class="tiles">${tile(left < 0 ? 'cal over target' : 'cal left', Math.abs(left), `${eaten.toLocaleString()} eaten of ${target.toLocaleString()}${st.burned ? ` (+${st.burned} earned)` : ''}`, left < 0, ' wide', calBar)}${tile(st.deficit < 0 ? 'cal surplus' : 'cal deficit', Math.abs(st.deficit), `goal ${dg}${st.burned ? ` · +${st.burned} burned` : ''}`, st.deficit < 0, ' wide')}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`
+  return `<div class="tiles">${tile(left < 0 ? 'cal over target' : 'cal left', Math.abs(left), `${eaten.toLocaleString()} eaten of ${target.toLocaleString()}${st.burned ? ` (+${st.burned} earned)` : ''}`, left < 0, ' wide', calBar)}${food.length ? tile(st.deficit < 0 ? 'cal surplus' : 'cal deficit', Math.abs(st.deficit), `goal ${dg}${st.burned ? ` · +${st.burned} burned` : ''}`, st.deficit < 0, ' wide')
+    : tile('cal deficit', '--', `log food to see today's deficit · goal ${dg}`, false, ' wide')}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`
     + (showSum ? summaryCard() : '') + checkoffCard();
 }
 const signed = (n) => (n > 0 ? '+' : '') + r0(n);
