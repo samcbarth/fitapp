@@ -11,6 +11,8 @@ const FOOD_GROUPS = [
     ['Nugget, single', '1 nugget', 32, 3.3, 1.3, 1.4],
     ['Sweet tea, large (32 oz)', '1 large', 240, 0, 60, 0],
     ['Chick-fil-A Sauce', '1 packet', 140, 0, 6, 13],
+    ['Grilled Nuggets, 12 count', '12 nuggets', 200, 38, 2, 4.5],
+    ['Grilled nugget, single', '1 nugget', 17, 3.2, 0.2, 0.4],
   ]],
   ['Regulars', [
     ["Wavy Lay's chip", '1 chip', 14, 0.2, 1.4, 0.9],

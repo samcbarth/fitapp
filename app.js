@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-17 16:00 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-17 18:00 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -35,6 +35,7 @@ let status = '';
 let editing = null; // preset id open in the Settings editor
 let found = null; // food search/scan result being portioned: {name, per100: {cal,p,c,f}, serving}
 let results = []; // food search results
+let qgroup = ld('fitapp.qgroup', 'Chick-fil-A'); // restaurant chip picked in Quick add ('*' = all)
 let lastFood = null; // food totals at the last Food tab render, to show +/- after each entry
 let localHits = []; // built-in foods / My meals matching the last search
 let qmul = 1; // quick-add serving multiplier
@@ -45,6 +46,7 @@ const foodOf = ([name, qty, cal, p, c, f]) => ({ name, qty, cal, p, c, f });
 const WHOLES = [
   ['Chick-fil-A', 'Waffle fry, single', 'Waffle Potato Fries, large'],
   ['Chick-fil-A', 'Nugget, single', 'Nuggets, 12 count'],
+  ['Chick-fil-A', 'Grilled nugget, single', 'Grilled Nuggets, 12 count'],
   ['Regulars', "Hershey's bar square", "Hershey's milk chocolate bar"],
   ['Regulars', 'Big gourmet cookie (Crumbl size)|1/4 cookie', 'Big gourmet cookie (Crumbl size)|1 whole cookie'],
   ['Popeyes', 'Cajun fry', 'Cajun Fries, regular'],
@@ -200,12 +202,12 @@ const sleepOk = (s) => { const b = s.bed < '12:00' ? '24' + s.bed : s.bed; retur
 // ---------- views ----------
 function dashboard() {
   const t = todayKey(), food = of('food', t), target = foodTarget(t), left = target - sum(food, (f) => f.cal), st = dayStats(t), dg = deficitGoal();
-  const tile = (label, v, sub, over, cls = '', extra = '') => `<div class="tile${over ? ' over' : ''}${cls}"><b>${typeof v === 'string' ? v : r0(v).toLocaleString()}</b><span>${label}</span><small>${sub}</small>${extra}</div>`;
+  const tile = (label, v, sub, over, cls = '', extra = '', pop = null) => `<div class="tile${over ? ' over' : ''}${cls}">${pop ? popNum(pop[0], pop[1], r0(v).toLocaleString(), pop[2], pop[3]) : `<b>${typeof v === 'string' ? v : r0(v).toLocaleString()}</b>`}<span>${label}</span><small>${sub}</small>${extra}</div>`;
   const eaten = r0(sum(food, (f) => f.cal)), pct = Math.min(100, target ? (eaten / target) * 100 : 0);
   const calBar = `<div class="bar"><div style="width:${pct}%;${left < 0 ? 'background:#e5484d' : ''}"></div></div>`;
   // the two calorie tiles are full width with big numbers; protein and water stay side by side
-  return `<div class="tiles">${tile(left < 0 ? 'cal over target' : 'cal left', Math.abs(left), `${eaten.toLocaleString()} eaten of ${target.toLocaleString()}${st.burned ? ` (+${st.burned} earned)` : ''}`, left < 0, ' wide', calBar)}${food.length ? tile(st.deficit < 0 ? 'cal surplus' : 'cal deficit', Math.abs(st.deficit), `goal ${dg}${st.burned ? ` · +${st.burned} burned` : ''}`, st.deficit < 0, ' wide')
-    : tile('cal deficit', '--', `log food to see today's deficit · goal ${dg}`, false, ' wide')}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`)}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`)}</div>`
+  return `<div class="tiles">${tile(left < 0 ? 'cal over target' : 'cal left', Math.abs(left), `${eaten.toLocaleString()} eaten of ${target.toLocaleString()}${st.burned ? ` (+${st.burned} earned)` : ''}`, left < 0, ' wide', calBar, ['calleft', r0(left), '', ''])}${food.length ? tile(st.deficit < 0 ? 'cal surplus' : 'cal deficit', Math.abs(st.deficit), `goal ${dg}${st.burned ? ` · +${st.burned} burned` : ''}`, st.deficit < 0, ' wide', '', ['deficit', r0(st.deficit), '', 'up'])
+    : tile('cal deficit', '--', `log food to see today's deficit · goal ${dg}`, false, ' wide')}${tile('protein g', sum(food, (f) => f.p), `of ${profile.protein}`, false, '', '', ['protein', r0(sum(food, (f) => f.p)), 'g', 'up'])}${tile('water oz', sum(of('water', t), (r) => r.value), `of ${profile.water}`, false, '', '', ['water', sum(of('water', t), (r) => r.value), ' oz', 'up'])}</div>`
     + (showSum ? summaryCard() : '') + checkoffCard();
 }
 const signed = (n) => (n > 0 ? '+' : '') + r0(n);
@@ -214,7 +216,7 @@ function checkoffCard() {
   const btn = done
     ? `<div class="row"><button class="btn ghost" data-act="uncheck">Undo check-off</button><button class="btn ghost" data-act="sumopen">Day summary</button></div><div class="mute">Today is checked off. Anything you log now still counts.</div>`
     : `<div class="row"><button class="btn" data-act="checkoff">Check off today</button></div><div class="mute">${food ? `${food} food entr${food === 1 ? 'y' : 'ies'} so far.` : 'No food logged yet.'} Check off tonight once everything you ate is in. Unchecked days don't count, and the day locks at midnight.</div>`;
-  return card('Daily log', `<div class="acts"><div><b>${s}</b><span>day streak</span></div><div><b class="${wk.total < 0 ? 'neg' : ''}">${signed(wk.total)}</b><span>week deficit</span></div><div><b>${r0(wk.goal)}</b><span>week goal</span></div></div>
+  return card('Daily log', `<div class="acts"><div>${popNum('streak', s, s, '', 'up')}<span>day streak</span></div><div><b data-pop="weekdef" data-v="${r0(wk.total)}" data-u="" data-good="up" class="${wk.total < 0 ? 'neg' : ''}">${signed(wk.total)}</b><span>week deficit</span></div><div><b>${r0(wk.goal)}</b><span>week goal</span></div></div>
     ${bar('Week so far', Math.max(0, wk.total), wk.goal, 'cal')}
     <div class="mute">On pace: ${r0(wk.pace)} by today (${wk.counted} day${wk.counted === 1 ? '' : 's'}).${wk.skipped ? ` ${wk.skipped} missed day${wk.skipped === 1 ? '' : 's'} left out.` : ''}</div>${btn}`, done ? 'checked off' : 'not checked off');
 }
@@ -240,10 +242,12 @@ const cIn = {}; // working counter values
 function counterCard(id) {
   const c = COUNTERS[id], saved = of(id, todayKey()).at(-1);
   if (cIn[id] == null) cIn[id] = c.start();
+  const cur = id === 'volume' ? volumeByDay()[todayKey()] || 0 : of('weight').at(-1)?.value;
+  const head = cur == null ? '' : `<div class="cbig">${popNum(id, cur, (+cur).toLocaleString(), ' lb', id === 'weight' ? 'down' : 'up')}<span>${id === 'volume' ? 'lifted today' : saved ? 'today' : 'last weigh-in'}</span></div>`;
   const note = id === 'volume'
     ? `Presets today: ${r0(setsToday())} lb${saved ? ' · saved ' + fmtTime(saved.ts) : ''}`
     : saved ? 'Last saved ' + fmtTime(saved.ts) + ': ' + saved.value : 'Not saved today';
-  return card(c.label, `<div class="ctr">
+  return card(c.label, `${head}<div class="ctr">
       <button class="pm" data-cstep="${id}:-1" aria-label="minus">-</button>
       <input id="in-${id}" type="number" inputmode="decimal" value="${cIn[id]}">
       <button class="pm" data-cstep="${id}:1" aria-label="plus">+</button></div>
@@ -255,7 +259,7 @@ function waterCard() {
   return card('Water', `<div class="grid3">${[8, 16, 24].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div>`, `${sum(of('water', todayKey()), (r) => r.value)} / ${profile.water} oz`);
 }
 
-const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal</span></button>`).join('')}</div>`, `tap to log · ${r0(burnByDay()[todayKey()] || 0)} cal earned today`);
+const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal</span></button>`).join('')}</div>`, `tap to log`) .replace('<div class="grid">', `<div class="pstat"><div>${popNum('earned', r0(burnByDay()[todayKey()] || 0), r0(burnByDay()[todayKey()] || 0), '', 'up')}<span>cal earned today</span></div><div>${popNum('pvol', r0(setsToday()), r0(setsToday()).toLocaleString(), ' lb', 'up')}<span>lb from presets</span></div></div><div class="grid">`);
 
 function lineFor(r) {
   if (r.metric === 'set') return `${esc(r.name)}: ${esc(presetLine(r))} · ${burnOf(r)} cal`;
@@ -293,13 +297,17 @@ function foodView() {
           <div class="bar"><div style="width:${pct(prot, profile.protein)}%"></div></div></div>
       </div>
       <div class="mute">Carbs ${r0(sum(food, (f) => f.c))} g · Fat ${r0(sum(food, (f) => f.f))} g · ${food.length} item${food.length === 1 ? '' : 's'}</div></div>`;
-  const row = (key, name, sub, f, extra = '') => `<div class="qrow" data-q="${esc((name + ' ' + sub).toLowerCase())}"><button class="qbtn" data-quick="${esc(key)}"><b>${esc(name)}</b><span>${f.qty ? esc(f.qty) + ' · ' : ''}${macroLine(f)}</span></button>${extra}</div>`;
+  const row = (key, name, sub, f, extra = '') => `<div class="qrow" data-q="${esc(searchText(name + ' ' + sub))}"><button class="qbtn" data-quick="${esc(key)}"><b>${esc(name)}</b><span>${f.qty ? esc(f.qty) + ' · ' : ''}${macroLine(f)}</span></button>${extra}</div>`;
   const groups = (meals.length ? [['My meals', meals.map((m) => row('m:' + m.id, m.name, 'my meals', m, `<button class="x" data-unmeal="${m.id}" aria-label="remove">✕</button>`))]] : [])
     .concat(FOOD_GROUPS.map(([g, items]) => [g, items.map((it, i) => row(`f:${g}:${i}`, it[0], g, foodOf(it)))]));
+  const names = groups.map(([g]) => g), sel = names.includes(qgroup) ? qgroup : names.includes('Chick-fil-A') ? 'Chick-fil-A' : names[0];
   const saved = card('Quick add', `<div class="qcount"><span class="mute">How many</span><button class="pm sm" data-qstep="-1" aria-label="fewer">-</button><b id="qn">${qmul}</b><button class="pm sm" data-qstep="1" aria-label="more">+</button></div>
       <div class="grid4">${[0.5, 5, 10, 15].map((m) => `<button class="chip${qmul === m ? ' on' : ''}" data-mul="${m}">${m === 0.5 ? '½' : m}</button>`).join('')}</div>
-      <input id="qf" placeholder="Filter: popeyes, chips, tea..." autocomplete="off">
-      <div class="qlist">${groups.map(([g, rows]) => `<div class="qgroup" data-g><h3>${esc(g)}</h3>${rows.join('')}</div>`).join('')}</div>
+      <div class="qsearch"><input id="qf" type="search" placeholder="Search all foods: cfa, nuggets, chips..." autocomplete="off" enterkeyhint="search"><button class="qclear" data-act="qclear" aria-label="clear search" hidden>✕</button></div>
+      <div class="qchips" id="qchips">${names.map((g) => `<button class="qchip${g === sel ? ' on' : ''}" data-qg="${esc(g)}">${esc(g)}</button>`).join('')}<button class="qchip${sel === '*' ? ' on' : ''}" data-qg="*">All</button></div>
+      <div class="mute" id="qinfo"></div>
+      <div class="qlist" id="qlist">${groups.map(([g, rows]) => `<div class="qgroup" data-g="${esc(g)}"${sel !== '*' && g !== sel ? ' hidden' : ''}><h3>${esc(g)} <span class="mute">${rows.length}</span></h3>${rows.join('')}</div>`).join('')}</div>
+      <div class="qnone" id="qnone" hidden>Nothing in your list matches. <button class="btn ghost" data-act="qonline">Search online</button></div>
       <div class="mute">Each food is one piece. Set how many, then tap the food. Count resets to 1 after logging. Macros are estimates.</div>`, 'from your orders');
   const find = card('Find food', `<div class="row"><button class="btn" data-act="scan">Scan barcode</button></div>
       <input id="scanfile" type="file" accept="image/*" capture="environment" hidden>
@@ -604,10 +612,33 @@ const views = {
       <div class="mute">Unsynced records: ${records.filter((r) => !r.synced).length}</div>`),
 };
 
+// Change cues: any number rendered as <b data-pop="key" data-v="number" data-u="unit"> pops and shows +/- for 3 seconds when it changes.
+// data-good="up" or "down" colours the change green when it moves the right way (red otherwise); leave it off for neutral.
+const popPrev = {}, popDelta = {};
+const popNum = (key, v, shown, unit = '', good = '') => `<b data-pop="${key}" data-v="${v}" data-u="${unit}"${good ? ` data-good="${good}"` : ''}>${shown}</b>`;
+function popCues() {
+  const now = Date.now();
+  document.querySelectorAll('[data-pop]').forEach((el) => {
+    const k = todayKey() + ':' + el.dataset.pop, v = parseFloat(el.dataset.v);
+    if (isNaN(v)) return;
+    const was = popPrev[k];
+    popPrev[k] = v;
+    const fresh = was != null && Math.abs(v - was) > 1e-9;
+    if (fresh) popDelta[k] = { d: v - was, at: now };
+    const pd = popDelta[k];
+    if (!pd || now - pd.at > 3000) return;
+    const d = +pd.d.toFixed(1), good = el.dataset.good, cls = !good ? 'neu' : (d > 0) === (good === 'up') ? '' : 'neg';
+    el.insertAdjacentHTML('beforeend', `<em class="delta ${cls}">${d > 0 ? '+' : ''}${Math.abs(d) >= 1000 ? d.toLocaleString() : d}${el.dataset.u}</em>`);
+    if (fresh) { el.classList.add('popnum'); setTimeout(() => el.classList.remove('popnum'), 500); }
+  });
+}
 function render(force) {
   $('#status').textContent = status;
   if (!force && document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return;
+  const qv = $('#qf')?.value || '';
   $('#view').innerHTML = views[tab]();
+  if (qv && $('#qf')) { $('#qf').value = qv; applyQuickFilter(); }
+  popCues();
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   if (tab === 'charts') { bindCharts(); document.querySelectorAll('#actscroll,.calscroll').forEach((s) => (s.scrollLeft = s.scrollWidth)); }
 }
@@ -701,10 +732,20 @@ async function offGet(url) {
     try { return await r.json(); } catch { throw new Error('Open Food Facts sent back something that is not JSON'); }
   }
 }
+// Search matching for food names: ignores case, spaces, dashes and apostrophes, singular vs plural, and knows nicknames.
+const ALIASES = { cfa: 'chick fil a', chickfila: 'chick fil a', mcd: 'mcdonalds', mcds: 'mcdonalds', mickeyds: 'mcdonalds', kfc: 'kfc', choc: 'chocolate', reeses: 'reese', hersheys: 'hershey', mms: 'm m', nug: 'nugget', nugs: 'nugget', tendie: 'tender', tendies: 'tender' };
+const stem = (w) => (w.length > 4 && w.endsWith('ies') ? w.slice(0, -3) + 'y' : w.length > 3 && w.endsWith('es') && /(ch|sh|x|s)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w);
+const normWords = (t) => t.toLowerCase().replace(/[’']/g, '').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).map(stem);
+const searchText = (t) => { const w = normWords(t); return w.join(' ') + ' | ' + w.join(''); }; // spaced words, then all squashed together
+function foodMatch(text, q) {
+  const words = normWords(q).flatMap((w) => (ALIASES[w] ? normWords(ALIASES[w]) : [w]));
+  if (!words.length) return true;
+  const squashed = text.split(' | ')[1] || '';
+  return words.every((w) => text.includes(w)) || squashed.includes(words.join(''));
+}
 // built-in foods and My meals whose name contains every word of the query
 function localMatches(q) {
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const hit = (txt) => words.every((w) => txt.toLowerCase().includes(w));
+  const hit = (txt) => foodMatch(searchText(txt), q);
   return meals.filter((m) => hit(m.name)).map((m) => ({ key: 'm:' + m.id, name: m.name, f: m }))
     .concat(FOOD_GROUPS.flatMap(([g, items]) => items.map((it, i) => ({ key: `f:${g}:${i}`, name: it[0], g, f: foodOf(it) })).filter((x) => hit(x.name + ' ' + x.g))));
 }
@@ -768,6 +809,8 @@ const num = (s) => parseFloat(val(s)) || 0;
 const handlers = {
   scan() { $('#scanfile').click(); },
   search() { const q = val('#q'); if (q) searchFood(q); },
+  qclear() { $('#qf').value = ''; applyQuickFilter(); $('#qf').focus(); },
+  qonline() { const q = val('#qf'); $('#q').value = q; $('#q').scrollIntoView({ block: 'center' }); searchFood(q); },
   fdclose() { found = null; render(true); },
   fdadd() { const g = num('#grams') || 100, k = g / 100, p = found.per100; logFood({ name: found.name, qty: g + ' g', cal: p.cal * k, p: p.p * k, c: p.c * k, f: p.f * k }, $('#fd-save').checked); found = null; },
   fmadd() { const name = val('#fm-name'); if (!name) { status = 'Give the food a name.'; return render(); } logFood({ name, cal: num('#fm-cal'), p: num('#fm-p'), c: num('#fm-c'), f: num('#fm-f') }, $('#fm-save').checked); },
@@ -822,6 +865,13 @@ document.addEventListener('click', (e) => {
   const setCount = (n) => { qmul = Math.max(0.5, n); $('#qn').textContent = qmul; document.querySelectorAll('[data-mul]').forEach((b) => b.classList.toggle('on', +b.dataset.mul === qmul)); };
   if (d.mul) return setCount(+d.mul);
   if (d.qstep) return setCount(qmul < 1 && +d.qstep > 0 ? 1 : Math.floor(qmul) + +d.qstep);
+  if (d.qg) {
+    qgroup = d.qg; sv('fitapp.qgroup', qgroup);
+    if ($('#qf')) $('#qf').value = '';
+    applyQuickFilter();
+    t.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+    return;
+  }
   if (d.quick) {
     const [kind, a, b] = d.quick.split(':');
     const f = kind === 'm' ? meals.find((x) => x.id === a) : foodOf(FOOD_GROUPS.find(([g]) => g === a)[1][+b]);
@@ -887,12 +937,25 @@ document.addEventListener('input', (e) => {
   bindCharts();
 });
 // filter the quick-add list in place (re-rendering would steal focus from the input)
-document.addEventListener('input', (e) => {
-  if (e.target.id !== 'qf') return;
-  const q = e.target.value.trim().toLowerCase();
-  document.querySelectorAll('.qrow').forEach((r) => (r.hidden = q && !r.dataset.q.includes(q)));
-  document.querySelectorAll('.qgroup').forEach((g) => (g.hidden = !g.querySelector('.qrow:not([hidden])')));
-});
+function applyQuickFilter() {
+  const inp = $('#qf'); if (!inp) return;
+  const q = inp.value.trim(), list = $('#qlist');
+  $('.qclear') && ($('.qclear').hidden = !q);
+  let n = 0;
+  document.querySelectorAll('.qgroup').forEach((g) => {
+    const inGroup = qgroup === '*' || g.dataset.g === qgroup;
+    let shown = 0;
+    g.querySelectorAll('.qrow').forEach((r) => { const ok = q ? foodMatch(r.dataset.q, q) : inGroup; r.hidden = !ok; if (ok) shown++; });
+    g.hidden = !shown; n += shown;
+    const c = g.querySelector('h3 .mute'); if (c) c.textContent = shown;
+  });
+  document.querySelectorAll('.qchip').forEach((c) => c.classList.toggle('on', !q && c.dataset.qg === qgroup));
+  $('#qchips').classList.toggle('dim', !!q);
+  $('#qinfo').textContent = q ? `${n} match${n === 1 ? '' : 'es'} for "${q}" in all restaurants` : '';
+  $('#qnone').hidden = !(q && !n);
+  if (list && q) list.scrollTop = 0;
+}
+document.addEventListener('input', (e) => { if (e.target.id === 'qf') applyQuickFilter(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'q') handlers.search(); });
 let installEv;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEv = e; const b = $('#install'); if (b) b.hidden = false; });
