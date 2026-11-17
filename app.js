@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-17 20:00 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-17 21:00 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -8,7 +8,7 @@ const KEY = 'fitapp.v2';
 const DEFAULT_PRESETS = [
   { id: 'kb-press', name: 'KB overhead/chest press', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
   { id: 'walk-block', name: 'Walk around block', weight: 0, reps: 1, unit: 'lap', kind: 'walk', min: 5, cal: null },
-  { id: 'kb-tricep', name: 'KB overhead tricep curl', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
+  { id: 'kb-tricep', name: 'KB overhead tricep curl', weight: 25, reps: 30, unit: 'reps', kind: 'light', min: 3, cal: null },
   { id: 'kb-deadlift', name: 'KB deadlift', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
 ];
 // presets added after launch: copied once into saved preset lists, so deleting one later keeps it deleted
@@ -17,8 +17,9 @@ const NEW_PRESETS = ['kb-tricep', 'kb-deadlift'];
 const DEFAULT_PROFILE = { sex: 'male', age: 35, heightIn: 70, activity: 1.375, deficitPct: 15, floor: 1000, goal: 200, protein: 200, water: 100, bed: '22:00', wake: '06:00' };
 // Day check-off started on this date. Earlier days with food logged count as complete so old history is kept.
 const CHECKOFF_START = '2026-11-16';
-// Exercise intensity (METs). Burn = (MET - 1) x kg x hours: the resting 1 MET is already inside maintenance.
-const KINDS = { lift: ['Lifting', 5], walk: ['Walking', 3.5], cardio: ['Hard cardio', 7] };
+// Exercise intensity (METs, 2024 Adult Compendium of Physical Activities). Burn = (MET - 1) x kg x hours: the resting 1 MET is already inside maintenance.
+// lift 5.0 = code 02052 (squats, deadlift). light 3.5 = code 02054 (8-15 reps at varied resistance; fits arm isolation like tricep work).
+const KINDS = { lift: ['Lifting (squat, deadlift)', 5], light: ['Light lifting (arms, isolation)', 3.5], walk: ['Walking', 3.5], cardio: ['Hard cardio', 7] };
 // Web push: the remind workflow in the private repo signs pushes with the matching private key (repo secret VAPID_PRIVATE)
 const VAPID_PUBLIC = 'BDJBvsujB4sHc0Cou0F-vXKVtnIGygMA_lC0E1hJq5GVuzM_c6o5Xxjj1V0k2AYzrAXABv-zQdE5xNpJ0SP-Fxg';
 const PARTS =['Waist', 'Chest', 'Hips', 'Neck', 'Arm', 'Thigh'];
@@ -33,6 +34,8 @@ let records = ld(KEY, []);
 let presets = ld('fitapp.presets', DEFAULT_PRESETS).map((p) => ({ kind: /walk/i.test(p.name) || p.weight === 0 ? 'walk' : 'lift', min: /walk/i.test(p.name) || p.weight === 0 ? 5 : 3, cal: null, ...p }));
 { const seen = new Set(ld('fitapp.presetsSeen', [])); let added = false;
   NEW_PRESETS.forEach((id) => { if (!seen.has(id)) { seen.add(id); if (!presets.some((p) => p.id === id)) { presets.push({ ...DEFAULT_PRESETS.find((p) => p.id === id) }); added = true; } } });
+  // one-time fix: the tricep preset first shipped as full lifting (5 MET); it is an arm isolation move (3.5 MET)
+  if (!ld('fitapp.fixTricep', false)) { const t = presets.find((p) => p.id === 'kb-tricep'); if (t && t.kind === 'lift') { t.kind = 'light'; added = true; } sv('fitapp.fixTricep', true); }
   sv('fitapp.presetsSeen', [...seen]); if (added) sv('fitapp.presets', presets); }
 let meals = ld('fitapp.meals', []); // saved foods: {id,name,qty,cal,p,c,f}
 let profile = { ...DEFAULT_PROFILE, ...ld('fitapp.profile', {}) };
