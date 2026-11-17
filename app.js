@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-17 01:20 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-17 16:00 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -40,6 +40,28 @@ let localHits = []; // built-in foods / My meals matching the last search
 let qmul = 1; // quick-add serving multiplier
 let showSum = false; // day summary popup after check-off
 const foodOf = ([name, qty, cal, p, c, f]) => ({ name, qty, cal, p, c, f });
+// Single pieces that add up to a whole item. Log singles as you eat, then swap them for the whole thing once you finish it.
+// [group, single "name|qty", whole "name|qty"]; qty only matters where two entries share a name
+const WHOLES = [
+  ['Chick-fil-A', 'Waffle fry, single', 'Waffle Potato Fries, large'],
+  ['Chick-fil-A', 'Nugget, single', 'Nuggets, 12 count'],
+  ['Regulars', "Hershey's bar square", "Hershey's milk chocolate bar"],
+  ['Regulars', 'Big gourmet cookie (Crumbl size)|1/4 cookie', 'Big gourmet cookie (Crumbl size)|1 whole cookie'],
+  ['Popeyes', 'Cajun fry', 'Cajun Fries, regular'],
+].map(([g, one, whole]) => {
+  const items = FOOD_GROUPS.find(([n]) => n === g)?.[1] || [];
+  const at = (k) => { const [n, q] = k.split('|'); return items.findIndex((it) => it[0] === n && (!q || it[1] === q)); };
+  const si = at(one), wi = at(whole);
+  return si < 0 || wi < 0 ? null : { single: `f:${g}:${si}`, whole: `f:${g}:${wi}`, one: foodOf(items[si]), all: foodOf(items[wi]) };
+}).filter(Boolean);
+// which pair a logged food record is a single of (by its quick-add key, or by name for entries logged before keys were saved)
+function pairOf(r) {
+  if (r.metric !== 'food') return null;
+  if (r.src) return WHOLES.find((w) => w.single === r.src) || null;
+  return WHOLES.find((w) => (r.name === w.one.name || new RegExp(`^[\\d.]+ × ${w.one.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`).test(r.name)) && (r.qty || '').endsWith(w.one.qty)) || null;
+}
+const singlesToday = (w) => of('food', todayKey()).filter((r) => pairOf(r) === w);
+const piecesIn = (r) => r.n || parseFloat((r.name.match(/^([\d.]+) × /) || [])[1]) || 1;
 
 const localDay = (ts) => new Date(ts).toLocaleDateString('en-CA');
 const todayKey = () => new Date().toLocaleDateString('en-CA');
@@ -248,7 +270,8 @@ function lineFor(r) {
 }
 function logList(filter, title, sub) {
   const t = live().filter((r) => localDay(r.ts) === todayKey() && filter(r)).reverse();
-  return card(title, t.length ? t.map((r) => `<div class="item"><span>${fmtTime(r.ts)} · ${lineFor(r)}</span>${delBtn(r)}</div>`).join('') : '<div class="mute">Nothing logged yet.</div>', sub);
+  const fin = (r) => { const w = pairOf(r); return w ? `<button class="fin" data-finish="${esc(rkey(r))}" title="Replace today's ${esc(w.one.name)} entries with ${esc(w.all.name)}">Finished ${esc(w.all.qty.replace(/^1 /, ''))}</button>` : ''; };
+  return card(title, t.length ? t.map((r) => `<div class="item"><span>${fmtTime(r.ts)} · ${lineFor(r)}</span><span class="acts2">${fin(r)}${delBtn(r)}</span></div>`).join('') : '<div class="mute">Nothing logged yet.</div>', sub);
 }
 
 function foodView() {
@@ -721,10 +744,24 @@ function add(rec, msg) {
   sync().then(() => render());
 }
 const logFood = (f, save) => {
-  const item = { name: f.name, qty: f.qty || '', cal: r0(f.cal), p: +(+f.p).toFixed(1), c: +(+f.c).toFixed(1), f: +(+f.f).toFixed(1) };
+  const item = { name: f.name, qty: f.qty || '', cal: r0(f.cal), p: +(+f.p).toFixed(1), c: +(+f.c).toFixed(1), f: +(+f.f).toFixed(1), ...(f.src ? { src: f.src, n: f.n } : {}) };
   if (save) { meals.push({ id: 'm' + Date.now(), ...item }); sv('fitapp.meals', meals); }
   add({ metric: 'food', ...item, value: item.cal }, 'Logged ' + item.name + '.');
 };
+// confirm text: what the early singles add up to vs the whole item
+function swapText(w, singles, k) {
+  const n = singles.reduce((a, r) => a + piecesIn(r), 0), had = r0(sum(singles, (r) => r.cal)), whole = r0(w.all.cal * k);
+  const name = k === 1 ? w.all.name : `${k} × ${w.all.name}`;
+  return `You logged ${n} × ${w.one.name} today (${had} cal). Finishing ${name} is ${whole} cal, so today goes ${whole - had >= 0 ? 'up' : 'down'} ${Math.abs(whole - had)} cal.`;
+}
+// remove the early singles (tombstones, same as Delete) and log the whole item in one save and one sync
+function swapToWhole(w, singles, k) {
+  const now = new Date().toISOString(), id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  singles.forEach((r) => records.push({ id: id(), ts: now, metric: 'del', ref: rkey(r), synced: false }));
+  const f = w.all, name = k === 1 ? f.name : `${k} × ${f.name}`;
+  logFood({ ...f, name, qty: k === 1 ? f.qty : `${k} × ${f.qty}`, cal: f.cal * k, p: f.p * k, c: f.c * k, f: f.f * k, src: w.whole, n: k });
+  status = `Replaced ${singles.length} early entr${singles.length === 1 ? 'y' : 'ies'} with ${name}.`; render(true);
+}
 const val = (s) => $(s)?.value.trim() ?? '';
 const num = (s) => parseFloat(val(s)) || 0;
 
@@ -791,11 +828,20 @@ document.addEventListener('click', (e) => {
     if (!f) return;
     const k = qmul;
     qmul = 1;
-    return logFood({ ...f, name: k === 1 ? f.name : `${k} × ${f.name}`, qty: k === 1 ? f.qty : `${k} × ${f.qty}`, cal: f.cal * k, p: f.p * k, c: f.c * k, f: f.f * k });
+    const w = WHOLES.find((x) => x.whole === d.quick), singles = w ? singlesToday(w) : [];
+    if (singles.length && confirm(swapText(w, singles, k) + '\n\nOK: replace them with this.\nCancel: keep them and log this as well.')) return swapToWhole(w, singles, k);
+    return logFood({ ...f, name: k === 1 ? f.name : `${k} × ${f.name}`, qty: k === 1 ? f.qty : `${k} × ${f.qty}`, cal: f.cal * k, p: f.p * k, c: f.c * k, f: f.f * k, src: d.quick, n: k });
   }
   if (d.unmeal) { if (confirm('Remove from My meals?')) { meals = meals.filter((m) => m.id !== d.unmeal); sv('fitapp.meals', meals); render(true); } return; }
   if (d.pick) { found = results[+d.pick]; results = []; return render(true); }
   if (d.view) return viewPhoto(d.view);
+  if (d.finish) {
+    const r = live().find((x) => rkey(x) === d.finish), w = r && pairOf(r);
+    if (!w) return;
+    const singles = singlesToday(w);
+    if (confirm(swapText(w, singles, 1) + '\n\nReplace them?')) swapToWhole(w, singles, 1);
+    return;
+  }
   if (d.del) { if (confirm('Delete this entry?')) { cIn.volume = null; add({ metric: 'del', ref: d.del }, 'Deleted.'); } return; }
   if (d.range != null) { range = +d.range; back = 0; return render(true); }
   if (d.pedit) { editing = d.pedit; return render(true); }

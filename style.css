@@ -150,3 +150,6 @@ rect[data-cday]{cursor:pointer}
 .tile.wide span{font-size:20px;font-weight:600}
 .tile.wide small{font-size:16px}
 .tile.wide .bar{height:10px;margin:8px 4px 0}
+/* Today's food: "Finished ..." swaps early single pieces for the whole item */
+.acts2{display:flex;align-items:center;gap:4px;flex:0 0 auto}
+button.fin{background:none;border:1px solid var(--acc);color:var(--acc);border-radius:8px;padding:6px 8px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
