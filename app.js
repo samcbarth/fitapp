@@ -1,15 +1,16 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-17 21:00 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-17 22:00 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
 // Presets: one tap logs a 'set' record. value = weight x reps (lifting volume); walks have weight 0.
-// kind + min drive the calories-burned estimate; cal (optional) overrides it.
+// Lifting presets burn per rep: reps x cal per rep, where cal per rep comes from kind (MET) and spr (seconds one rep takes,
+// including its share of the rest). cpr (optional) overrides cal per rep. Walk/cardio presets burn by min per tap; cal overrides.
 const DEFAULT_PRESETS = [
-  { id: 'kb-press', name: 'KB overhead/chest press', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
+  { id: 'kb-press', name: 'KB overhead/chest press', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, spr: 6, cpr: null, cal: null },
   { id: 'walk-block', name: 'Walk around block', weight: 0, reps: 1, unit: 'lap', kind: 'walk', min: 5, cal: null },
-  { id: 'kb-tricep', name: 'KB overhead tricep curl', weight: 25, reps: 30, unit: 'reps', kind: 'light', min: 3, cal: null },
-  { id: 'kb-deadlift', name: 'KB deadlift', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
+  { id: 'kb-tricep', name: 'KB overhead tricep curl', weight: 25, reps: 30, unit: 'reps', kind: 'light', min: 3, spr: 6, cpr: null, cal: null },
+  { id: 'kb-deadlift', name: 'KB deadlift', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, spr: 6, cpr: null, cal: null },
 ];
 // presets added after launch: copied once into saved preset lists, so deleting one later keeps it deleted
 const NEW_PRESETS = ['kb-tricep', 'kb-deadlift'];
@@ -19,6 +20,7 @@ const DEFAULT_PROFILE = { sex: 'male', age: 35, heightIn: 70, activity: 1.375, d
 const CHECKOFF_START = '2026-11-16';
 // Exercise intensity (METs, 2024 Adult Compendium of Physical Activities). Burn = (MET - 1) x kg x hours: the resting 1 MET is already inside maintenance.
 // lift 5.0 = code 02052 (squats, deadlift). light 3.5 = code 02054 (8-15 reps at varied resistance; fits arm isolation like tricep work).
+const LIFTS = ['lift', 'light']; // kinds that burn per rep
 const KINDS = { lift: ['Lifting (squat, deadlift)', 5], light: ['Light lifting (arms, isolation)', 3.5], walk: ['Walking', 3.5], cardio: ['Hard cardio', 7] };
 // Web push: the remind workflow in the private repo signs pushes with the matching private key (repo secret VAPID_PRIVATE)
 const VAPID_PUBLIC = 'BDJBvsujB4sHc0Cou0F-vXKVtnIGygMA_lC0E1hJq5GVuzM_c6o5Xxjj1V0k2AYzrAXABv-zQdE5xNpJ0SP-Fxg';
@@ -34,6 +36,8 @@ let records = ld(KEY, []);
 let presets = ld('fitapp.presets', DEFAULT_PRESETS).map((p) => ({ kind: /walk/i.test(p.name) || p.weight === 0 ? 'walk' : 'lift', min: /walk/i.test(p.name) || p.weight === 0 ? 5 : 3, cal: null, ...p }));
 { const seen = new Set(ld('fitapp.presetsSeen', [])); let added = false;
   NEW_PRESETS.forEach((id) => { if (!seen.has(id)) { seen.add(id); if (!presets.some((p) => p.id === id)) { presets.push({ ...DEFAULT_PRESETS.find((p) => p.id === id) }); added = true; } } });
+  // presets saved before per-rep burn: seconds per rep = their old minutes spread over their reps (keeps the same total)
+  presets.forEach((p) => { if (LIFTS.includes(p.kind) && p.spr == null) { p.spr = p.reps > 0 ? Math.round(((+p.min || 3) * 600) / p.reps) / 10 : 6; p.cpr = null; added = true; } });
   // one-time fix: the tricep preset first shipped as full lifting (5 MET); it is an arm isolation move (3.5 MET)
   if (!ld('fitapp.fixTricep', false)) { const t = presets.find((p) => p.id === 'kb-tricep'); if (t && t.kind === 'lift') { t.kind = 'light'; added = true; } sv('fitapp.fixTricep', true); }
   sv('fitapp.presetsSeen', [...seen]); if (added) sv('fitapp.presets', presets); }
@@ -83,6 +87,7 @@ const live = () => { const dead = new Set(records.filter((r) => r.metric === 'de
 const of = (metric, day) => live().filter((r) => r.metric === metric && (!day || localDay(r.ts) === day));
 const sum = (a, f) => a.reduce((s, x) => s + (+f(x) || 0), 0);
 const r0 = (n) => Math.round(n);
+const r2 = (n) => Math.round(n * 100) / 100;
 
 // daily lifting volume: logged sets plus any legacy manual 'volume' total (last per day)
 function volumeByDay() {
@@ -120,7 +125,11 @@ function trend() {
 // ---------- calories burned from workout presets ----------
 const bodyKg = () => (trend()?.avg || of('weight').at(-1)?.value || 200) * 0.4536;
 const estBurn = (kind, min) => r0(((KINDS[kind] || KINDS.lift)[1] - 1) * bodyKg() * ((+min || 0) / 60));
-const presetBurn = (p) => (p.cal != null && p.cal !== '' ? +p.cal : estBurn(p.kind, p.min));
+// calories for one rep: (MET - 1) x kg x seconds per rep / 3600
+const estPerRep = (kind, spr) => ((KINDS[kind] || KINDS.lift)[1] - 1) * bodyKg() * ((+spr || 0) / 3600);
+const isLift = (p) => LIFTS.includes(p.kind);
+const perRep = (p) => (p.cpr != null && p.cpr !== '' ? +p.cpr : estPerRep(p.kind, p.spr));
+const presetBurn = (p) => (isLift(p) ? r0((+p.reps || 0) * perRep(p)) : p.cal != null && p.cal !== '' ? +p.cal : estBurn(p.kind, p.min));
 // burn stored on each set when logged; older sets without one are estimated from their preset now
 const burnOf = (r) => r.burn ?? (() => { const p = presets.find((x) => x.id === r.preset) || presets.find((x) => x.name === r.name); return p ? presetBurn(p) : 0; })();
 const burnByDay = () => { const o = {}; of('set').forEach((r) => { const d = localDay(r.ts); o[d] = (o[d] || 0) + burnOf(r); }); return o; };
@@ -269,7 +278,7 @@ function waterCard() {
   return card('Water', `<div class="grid4">${[1, 2, 3, 4].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div><div class="grid3">${[8, 16, 24].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div>`, `${sum(of('water', todayKey()), (r) => r.value)} / ${profile.water} oz`);
 }
 
-const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal</span></button>`).join('')}</div>`, `tap to log`) .replace('<div class="grid">', `<div class="pstat"><div>${popNum('earned', r0(burnByDay()[todayKey()] || 0), r0(burnByDay()[todayKey()] || 0), '', 'up')}<span>cal earned today</span></div><div>${popNum('pvol', r0(setsToday()), r0(setsToday()).toLocaleString(), ' lb', 'up')}<span>lb from presets</span></div></div><div class="grid">`);
+const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal${isLift(p) ? ` (${r2(perRep(p))}/rep)` : ''}</span></button>`).join('')}</div>`, `tap to log`) .replace('<div class="grid">', `<div class="pstat"><div>${popNum('earned', r0(burnByDay()[todayKey()] || 0), r0(burnByDay()[todayKey()] || 0), '', 'up')}<span>cal earned today</span></div><div>${popNum('pvol', r0(setsToday()), r0(setsToday()).toLocaleString(), ' lb', 'up')}<span>lb from presets</span></div></div><div class="grid">`);
 
 function lineFor(r) {
   if (r.metric === 'set') return `${esc(r.name)}: ${esc(presetLine(r))} · ${burnOf(r)} cal`;
@@ -530,13 +539,15 @@ function presetEditor() {
         <input data-f="name" value="${esc(p.name)}" placeholder="Name">
         <div class="row"><input data-f="weight" type="number" inputmode="decimal" value="${p.weight}" placeholder="lb"><input data-f="reps" type="number" inputmode="decimal" value="${p.reps}" placeholder="reps"><input data-f="unit" value="${esc(p.unit)}" placeholder="unit"></div>
         <label class="mute">Type<select data-f="kind">${Object.entries(KINDS).map(([k, [l]]) => `<option value="${k}"${p.kind === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-        <div class="row"><label class="mute">Minutes per tap<input data-f="min" type="number" inputmode="decimal" value="${p.min ?? ''}"></label>
+        <div class="row"${isLift(p) ? '' : ' hidden'} data-for="lift"><label class="mute">Seconds per rep<input data-f="spr" type="number" inputmode="decimal" value="${p.spr ?? 6}"></label>
+          <label class="mute">Cal per rep<input data-f="cpr" type="number" inputmode="decimal" step="0.01" value="${p.cpr ?? ''}" placeholder="auto"></label></div>
+        <div class="row"${isLift(p) ? ' hidden' : ''} data-for="time"><label class="mute">Minutes per tap<input data-f="min" type="number" inputmode="decimal" value="${p.min ?? ''}"></label>
           <label class="mute">Calories<input data-f="cal" type="number" inputmode="decimal" value="${p.cal ?? ''}" placeholder="auto"></label></div>
-        <div class="mute">Leave Calories blank to use the estimate (${estBurn(p.kind, p.min)} cal now).</div>
+        <div class="mute">${isLift(p) ? `Calories = reps x cal per rep. Leave Cal per rep blank for the estimate (${r2(estPerRep(p.kind, p.spr ?? 6))} now, ${presetBurn(p)} cal for ${p.reps} reps).` : `Leave Calories blank to use the estimate (${estBurn(p.kind, p.min)} cal now).`}</div>
         <div class="row"><button class="btn" data-act="psave">Save</button><button class="btn ghost" data-act="pdel">Delete</button></div></div>`
-    : `<div class="item"><span>${esc(p.name)} · <span class="mute">${esc(presetLine(p))} · ${presetBurn(p)} cal${p.cal != null && p.cal !== '' ? ' (set)' : ' (auto)'}</span></span><button class="x" data-pedit="${p.id}">Edit</button></div>`;
+    : `<div class="item"><span>${esc(p.name)} · <span class="mute">${esc(presetLine(p))} · ${presetBurn(p)} cal${isLift(p) ? ` · ${r2(perRep(p))}/rep${p.cpr != null && p.cpr !== '' ? ' (set)' : ' (auto)'}` : p.cal != null && p.cal !== '' ? ' (set)' : ' (auto)'}</span></span><button class="x" data-pedit="${p.id}">Edit</button></div>`;
   return card('Workout presets', presets.map(row).join('') + `<div class="row" style="margin-top:12px"><button class="btn" data-act="padd">Add preset</button></div>
-    <div class="mute">Calories burned are estimated from your current weight, the exercise type and the minutes one tap takes. Leave Calories blank to keep the estimate updating as you lose weight.</div>`);
+    <div class="mute">Lifting presets burn per rep: (MET - 1) x your weight in kg x seconds per rep / 3600, with METs from the 2024 Compendium of Physical Activities. Walks and cardio use minutes per tap. Leave Calories blank to keep the estimate updating as you lose weight.</div>`);
 }
 
 function profileCard() {
@@ -846,7 +857,7 @@ const handlers = {
   },
   sumopen() { showSum = true; render(true); },
   sumclose() { showSum = false; render(true); },
-  padd() { const p = { id: 'p' + Date.now(), name: 'New preset', weight: 0, reps: 10, unit: 'reps', kind: 'lift', min: 3, cal: null }; presets.push(p); sv('fitapp.presets', presets); editing = p.id; render(true); },
+  padd() { const p = { id: 'p' + Date.now(), name: 'New preset', weight: 0, reps: 10, unit: 'reps', kind: 'lift', min: 3, spr: 6, cpr: null, cal: null }; presets.push(p); sv('fitapp.presets', presets); editing = p.id; render(true); },
   tok() { token = val('#tok'); sv('fitapp.token', token); status = 'Token saved.'; render(true); sync().then(() => render()); },
   sync() { sync().then(() => render()); },
   push() { enablePush().catch((e) => { status = 'Reminders failed (' + e.message + ').'; render(true); }); },
@@ -910,13 +921,15 @@ document.addEventListener('click', (e) => {
     if (d.act === 'pdel') { if (!confirm('Delete preset?')) return; presets = presets.filter((p) => p.id !== id); }
     else {
       const f = (k) => box.querySelector(`[data-f="${k}"]`).value.trim();
-      Object.assign(presets.find((x) => x.id === id), { name: f('name') || 'Preset', weight: parseFloat(f('weight')) || 0, reps: parseFloat(f('reps')) || 0, unit: f('unit') || 'reps', kind: f('kind') || 'lift', min: parseFloat(f('min')) || 0, cal: f('cal') === '' ? null : parseFloat(f('cal')) || 0 });
+      Object.assign(presets.find((x) => x.id === id), { name: f('name') || 'Preset', weight: parseFloat(f('weight')) || 0, reps: parseFloat(f('reps')) || 0, unit: f('unit') || 'reps', kind: f('kind') || 'lift', min: parseFloat(f('min')) || 0, cal: f('cal') === '' ? null : parseFloat(f('cal')) || 0, spr: parseFloat(f('spr')) || 6, cpr: f('cpr') === '' ? null : parseFloat(f('cpr')) || 0 });
     }
     sv('fitapp.presets', presets); editing = null; status = 'Presets saved.'; return render(true);
   }
   if (handlers[d.act]) handlers[d.act]();
 });
 document.addEventListener('change', (e) => {
+  // preset editor: lifting types use seconds/cal per rep, walk and cardio use minutes per tap
+  if (e.target.matches('.edit [data-f="kind"]')) { const box = e.target.closest('.edit'), lift = LIFTS.includes(e.target.value); box.querySelector('[data-for="lift"]').hidden = !lift; box.querySelector('[data-for="time"]').hidden = lift; return; }
   if (e.target.id === 'scanfile' && e.target.files[0]) scanFile(e.target.files[0]);
   if (e.target.id === 'photofile' && e.target.files[0]) uploadPhoto(e.target.files[0]).catch((x) => { status = 'Photo failed (' + x.message + ').'; render(); });
 });
