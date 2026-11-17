@@ -1,5 +1,5 @@
 // FitApp: weight, workouts, food, body, sleep, water -> timestamped records -> data/records.json in the private data repo.
-const VERSION = '2026-11-17 18:00 UTC'; // auto-stamped by .git/hooks/pre-commit
+const VERSION = '2026-11-17 20:00 UTC'; // auto-stamped by .git/hooks/pre-commit
 const REPO = 'samcbarth/fitapp-data'; // private; the app itself is served from public samcbarth/fitapp
 const PATH = 'data/records.json';
 const KEY = 'fitapp.v2';
@@ -8,7 +8,11 @@ const KEY = 'fitapp.v2';
 const DEFAULT_PRESETS = [
   { id: 'kb-press', name: 'KB overhead/chest press', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
   { id: 'walk-block', name: 'Walk around block', weight: 0, reps: 1, unit: 'lap', kind: 'walk', min: 5, cal: null },
+  { id: 'kb-tricep', name: 'KB overhead tricep curl', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
+  { id: 'kb-deadlift', name: 'KB deadlift', weight: 25, reps: 30, unit: 'reps', kind: 'lift', min: 3, cal: null },
 ];
+// presets added after launch: copied once into saved preset lists, so deleting one later keeps it deleted
+const NEW_PRESETS = ['kb-tricep', 'kb-deadlift'];
 // deficitPct: food target is this percent below maintenance. floor: food target never goes below this.
 const DEFAULT_PROFILE = { sex: 'male', age: 35, heightIn: 70, activity: 1.375, deficitPct: 15, floor: 1000, goal: 200, protein: 200, water: 100, bed: '22:00', wake: '06:00' };
 // Day check-off started on this date. Earlier days with food logged count as complete so old history is kept.
@@ -27,6 +31,9 @@ const sv = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch
 let records = ld(KEY, []);
 // older saved presets have no kind/min: walks get 5 minute laps, everything else 3 minutes of lifting
 let presets = ld('fitapp.presets', DEFAULT_PRESETS).map((p) => ({ kind: /walk/i.test(p.name) || p.weight === 0 ? 'walk' : 'lift', min: /walk/i.test(p.name) || p.weight === 0 ? 5 : 3, cal: null, ...p }));
+{ const seen = new Set(ld('fitapp.presetsSeen', [])); let added = false;
+  NEW_PRESETS.forEach((id) => { if (!seen.has(id)) { seen.add(id); if (!presets.some((p) => p.id === id)) { presets.push({ ...DEFAULT_PRESETS.find((p) => p.id === id) }); added = true; } } });
+  sv('fitapp.presetsSeen', [...seen]); if (added) sv('fitapp.presets', presets); }
 let meals = ld('fitapp.meals', []); // saved foods: {id,name,qty,cal,p,c,f}
 let profile = { ...DEFAULT_PROFILE, ...ld('fitapp.profile', {}) };
 let token = ld('fitapp.token', '');
@@ -256,7 +263,7 @@ function counterCard(id) {
 }
 
 function waterCard() {
-  return card('Water', `<div class="grid3">${[8, 16, 24].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div>`, `${sum(of('water', todayKey()), (r) => r.value)} / ${profile.water} oz`);
+  return card('Water', `<div class="grid4">${[1, 2, 3, 4].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div><div class="grid3">${[8, 16, 24].map((n) => `<button class="chip" data-water="${n}">+${n} oz</button>`).join('')}</div>`, `${sum(of('water', todayKey()), (r) => r.value)} / ${profile.water} oz`);
 }
 
 const presetsCard = () => card('Workout presets', `<div class="grid">${presets.map((p) => `<button class="preset" data-log="${p.id}"><b>${esc(p.name)}</b><span>${esc(presetLine(p))} · ${presetBurn(p)} cal</span></button>`).join('')}</div>`, `tap to log`) .replace('<div class="grid">', `<div class="pstat"><div>${popNum('earned', r0(burnByDay()[todayKey()] || 0), r0(burnByDay()[todayKey()] || 0), '', 'up')}<span>cal earned today</span></div><div>${popNum('pvol', r0(setsToday()), r0(setsToday()).toLocaleString(), ' lb', 'up')}<span>lb from presets</span></div></div><div class="grid">`);
