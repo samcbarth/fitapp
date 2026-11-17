@@ -184,3 +184,4 @@ button.fin{background:none;border:1px solid var(--acc);color:var(--acc);border-r
 .pstat span{color:var(--mute);font-size:15px}
 /* the hidden attribute must win over display:flex/grid rules (the old food filter never actually hid rows) */
 [hidden]{display:none!important}
+.row.bottom{align-items:flex-end}
